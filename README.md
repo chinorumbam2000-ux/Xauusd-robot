@@ -71,6 +71,32 @@ python -m xauusd_robot.cli split --data data/XAUUSD_M5_synthetic.csv --risk 1.0
 Bring your own data by exporting M5 bars to CSV with `time, open, high, low, close`
 (plus optional `volume` and `spread` in points). Column names are matched case-insensitively.
 
+### Real data from MetaTrader 5
+
+`scripts/fetch_mt5_data.py` pulls real M5 history and the broker's live symbol specification
+straight from a local MT5 terminal. It is **read-only** — it calls only data functions and never
+places, modifies or closes an order. Credentials come from the environment so they are never
+written to a file or committed:
+
+```powershell
+$env:MT5_LOGIN    = "your_login"
+$env:MT5_SERVER   = "Broker-Demo"
+$env:MT5_PASSWORD = "..."            # never hard-code; clear it afterwards
+python scripts/fetch_mt5_data.py --years 5 --out data/XAUUSD_M5_live.csv
+
+python -m xauusd_robot.cli backtest --data data/XAUUSD_M5_live.csv --broker deriv --risk 1.0 --balance 10000
+```
+
+If the terminal is already running and logged in, omit the credentials entirely and the script
+attaches to that session. Two MT5 quirks the script works around: a single `copy_rates_range`
+call stops returning data past roughly 180 days, and `copy_rates_from_pos` is capped by the
+terminal's `maxbars`. It therefore walks backwards in 30-day windows and stops when the broker's
+history floor announces itself.
+
+Never send broker credentials to a third-party "MT5 REST API" service. MetaQuotes publishes no
+official REST API, so those are all third parties, and handing one your login hands it account
+control. The local Python integration above keeps everything on your machine.
+
 ## The setup funnel
 
 Because the rule stack is highly selective, the most useful diagnostic is *where setups die*.
@@ -95,6 +121,48 @@ rejected_spread_vs_sl                    29
 Section 16 of the blueprint anticipates exactly this ("Over-defining confluence ... could starve
 the system of trades"). The funnel turns that risk into a measurement rather than an opinion,
 and points at which rule family to vary first during robustness testing.
+
+## First run on real data — and why it proves nothing yet
+
+100,000 real M5 bars from a Deriv demo account (2025-04-11 → 2026-09-10, 517 days, median
+spread 15 points), $10,000 start, 1% risk:
+
+| | |
+| --- | --- |
+| Trades | 15 (1.72/month) |
+| Win rate | 33.3% (break-even for 1:3 is 25%) |
+| Expectancy | +0.33R · profit factor 1.47 |
+| Net return | +4.44% · max drawdown 3.41% |
+| Worst streak | 3 consecutive losses |
+
+**Do not read this as an edge.** Three reasons:
+
+1. **The sample is far too small.** Fifteen trades cannot distinguish a 33% win rate from a 25%
+   one; the standard error on win rate at n=15 is roughly ±12 points.
+2. **The profit is two trades.** Both confluence-score-2 setups won (+6R combined); the other
+   thirteen trades net **−1R**. Remove two trades and the result is a small loss.
+3. **There is no out-of-sample segment.** The D1 EMA200 consumes ~57,600 bars of warm-up, so of
+   100,000 bars only ~42,000 are tradeable at all. A chronological in-sample/validation/OOS split
+   (Section 9.2) is not yet possible — every segment would be shorter than the warm-up.
+
+The risk matrix does produce one actionable result. Because risk % does not change the signals,
+the trade sequence is identical across settings and only the scaling differs:
+
+| Risk | Net return | Max drawdown |
+| --- | --- | --- |
+| 0.5% | +2.22% | 1.54% |
+| 1.0% | +4.44% | 3.41% |
+| 2.0% | +9.37% | 6.50% |
+| 3.0% | +14.62% | 9.39% |
+| 5.0% | +24.75% | **14.69%** |
+
+At 5%, a mere 3-loss streak drives drawdown to 14.69% against the 15% peak-equity lockout — a
+fourth consecutive loss would have locked the account out entirely. That is concrete support for
+Section 16's warning to treat 5% as a research variant rather than an automatic live setting.
+
+**Next step is more history**, not more parameter tuning. Deriv's demo server caps M5 depth at
+roughly 17 months; a broker or data vendor with several years of M5 gold is required before any
+of the Section 9.2 validation (out-of-sample, walk-forward) can run.
 
 ## Design decisions worth knowing
 

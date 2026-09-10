@@ -105,6 +105,22 @@ class StrategyConfig:
         return self.risk_percent_initial_balance / 100.0
 
 
+#: Live Deriv-Demo XAUUSD properties, read from the terminal via
+#: scripts/fetch_mt5_data.py. Section 5.3 requires these to come from the
+#: broker rather than assumed constants -- re-read them if the broker or
+#: account changes.
+DERIV_XAUUSD = BrokerSpec(
+    symbol="XAUUSD",
+    contract_size=100.0,
+    tick_size=0.01,
+    tick_value=1.0,
+    volume_step=0.01,
+    volume_min=0.01,
+    volume_max=10.0,
+    leverage=100.0,
+    default_spread_points=15.0,  # observed median; real spread column overrides this
+)
+
 #: Research matrix from Section 10 / 17.2 -- compare, never cherry-pick.
 RISK_TEST_MATRIX: Tuple[float, ...] = (0.5, 1.0, 2.0, 3.0, 5.0)
 

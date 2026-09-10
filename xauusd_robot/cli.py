@@ -16,7 +16,16 @@ from dataclasses import replace
 import pandas as pd
 
 from .backtester import Backtester
-from .config import StrategyConfig
+from .config import DERIV_XAUUSD, BrokerSpec, StrategyConfig
+
+BROKERS = {"default": BrokerSpec(), "deriv": DERIV_XAUUSD}
+
+
+def _config(risk: float | None = None, broker: str = "default") -> StrategyConfig:
+    config = StrategyConfig(broker=BROKERS[broker])
+    if risk is not None:
+        config = replace(config, risk_percent_initial_balance=risk)
+    return config
 from .data import load_m5_csv
 from .metrics import monte_carlo_target_probability
 from .validation import (
@@ -80,7 +89,7 @@ def _parse_values(text: str):
 
 def cmd_backtest(args) -> None:
     m5 = load_m5_csv(args.data)
-    config = replace(StrategyConfig(), risk_percent_initial_balance=args.risk)
+    config = _config(args.risk, args.broker)
     result = Backtester(m5, config, args.balance).run()
     _print_metrics(result.metrics, f"Backtest risk={args.risk}%")
 
@@ -114,7 +123,7 @@ def cmd_backtest(args) -> None:
 
 def cmd_risk_matrix(args) -> None:
     m5 = load_m5_csv(args.data)
-    table = risk_matrix_comparison(m5, StrategyConfig(), args.balance)
+    table = risk_matrix_comparison(m5, _config(broker=args.broker), args.balance)
     print("\n=== Risk research matrix (Section 5.1) ===")
     print(table.to_string(index=False, float_format=lambda v: f"{v:,.3f}"))
     print("\nChoose a production risk from evidence (drawdown + robustness), never from intuition.")
@@ -123,7 +132,7 @@ def cmd_risk_matrix(args) -> None:
 def cmd_sweep(args) -> None:
     m5 = load_m5_csv(args.data)
     values = _parse_values(args.values)
-    table = parameter_sweep(m5, args.param, values, StrategyConfig(), args.balance)
+    table = parameter_sweep(m5, args.param, values, _config(broker=args.broker), args.balance)
     print(f"\n=== Parameter sweep: {args.param} (Section 10) ===")
     print(table.to_string(index=False, float_format=lambda v: f"{v:,.3f}"))
     print("\nPrefer a broad plateau across neighbouring values over a single narrow peak.")
@@ -131,14 +140,14 @@ def cmd_sweep(args) -> None:
 
 def cmd_spread_stress(args) -> None:
     m5 = load_m5_csv(args.data)
-    table = spread_stress_test(m5, base_config=StrategyConfig(), initial_balance=args.balance)
+    table = spread_stress_test(m5, base_config=_config(broker=args.broker), initial_balance=args.balance)
     print("\n=== Spread / execution stress test ===")
     print(table.to_string(index=False, float_format=lambda v: f"{v:,.3f}"))
 
 
 def cmd_split(args) -> None:
     m5 = load_m5_csv(args.data)
-    config = replace(StrategyConfig(), risk_percent_initial_balance=args.risk)
+    config = _config(args.risk, args.broker)
     for name, segment in chronological_split(m5).items():
         if len(segment) < config.ema_period * 2:
             print(f"\n{name}: too few bars ({len(segment)}) for a meaningful run")
@@ -154,6 +163,8 @@ def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--data", required=True, help="path to M5 OHLC CSV")
     common.add_argument("--balance", type=float, default=1000.0, help="initial account balance")
+    common.add_argument("--broker", choices=sorted(BROKERS), default="default",
+                        help="broker symbol specification (deriv = live Deriv-Demo XAUUSD spec)")
 
     p = sub.add_parser("backtest", parents=[common])
     p.add_argument("--risk", type=float, default=1.0)
