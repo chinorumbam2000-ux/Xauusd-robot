@@ -54,6 +54,10 @@ class OpenPosition:
     zone_id: int
     confluence_score: int
     monetary_loss_per_lot: float
+    #: Best favourable excursion reached, in R. Bars where the stop was hit
+    #: are excluded, matching the simulator's stop-before-target assumption,
+    #: so this never flatters a laddered-exit analysis.
+    mfe_r: float = 0.0
 
 
 @dataclass
@@ -197,6 +201,13 @@ class Backtester:
         return price_move / b.tick_size * b.tick_value * lots
 
     # ------------------------------------------------------------------
+    def _favourable_r(self, p: "OpenPosition", bar_high: float, bar_low: float) -> float:
+        """How far this bar ran in the trade's favour, in R."""
+        if p.stop_distance <= 0:
+            return 0.0
+        move = (bar_high - p.entry_price) if p.direction == "BUY" else (p.entry_price - bar_low)
+        return move / p.stop_distance
+
     def _manage_position(self, i: int) -> None:
         p = self.position
         bar_open, bar_high, bar_low = float(self.open_[i]), float(self.high[i]), float(self.low[i])
@@ -204,6 +215,8 @@ class Backtester:
         if p.direction == "BUY":
             hit_stop = bar_low <= p.stop_trigger
             hit_target = bar_high >= p.target_trigger
+            if not hit_stop:
+                p.mfe_r = max(p.mfe_r, self._favourable_r(p, bar_high, bar_low))
             if hit_stop:
                 exit_price = bar_open if bar_open <= p.stop_trigger else p.stop_trigger
                 self._close_position(i, exit_price, "stop_loss")
@@ -215,6 +228,8 @@ class Backtester:
         else:
             hit_stop = bar_high >= p.stop_trigger
             hit_target = bar_low <= p.target_trigger
+            if not hit_stop:
+                p.mfe_r = max(p.mfe_r, self._favourable_r(p, bar_high, bar_low))
             if hit_stop:
                 exit_price = bar_open if bar_open >= p.stop_trigger else p.stop_trigger
                 self._close_position(i, exit_price, "stop_loss")
@@ -232,6 +247,8 @@ class Backtester:
             pnl_price = p.entry_price - (exit_bid + p.spread)
         money = self._price_to_money(pnl_price, p.lots)
         r_multiple = pnl_price / p.stop_distance if p.stop_distance else 0.0
+        if reason == "take_profit":
+            p.mfe_r = max(p.mfe_r, r_multiple)
 
         self.balance += money
         self.safety.register_trade_close(r_multiple, self.balance, i)
@@ -245,6 +262,7 @@ class Backtester:
             zone_type=p.zone_type,
             zone_id=p.zone_id,
             confluence_score=p.confluence_score,
+            mfe_r=round(p.mfe_r, 4),
             entry_price=p.entry_price,
             exit_price=exit_bid,
             stop_price=p.stop_price,
