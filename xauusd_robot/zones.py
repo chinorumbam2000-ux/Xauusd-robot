@@ -259,8 +259,13 @@ class ZoneEngine:
             )
             if reacted:
                 score, types = self._confluence(z)
-                z.retired = True
-                z.retired_reason = "reacted"
+                if cfg.first_reaction_only:
+                    z.retired = True
+                    z.retired_reason = "reacted"
+                else:
+                    # Zone stays eligible; release the touch so it can react again.
+                    z.touched = False
+                    z.touch_bar = None
                 events.append(
                     ReactionEvent(
                         zone=z,
