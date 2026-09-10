@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>XAUUSD Robot v1.1</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --panel2: #1e222b; --line: #2a2f3a;
+    --text: #e6e9ef; --dim: #8b93a3; --accent: #4c8dff;
+    --up: #29c07a; --down: #e5484d; --warn: #e8a33d;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.5 "Segoe UI", system-ui, sans-serif; padding: 16px; }
+  h1 { font-size: 17px; margin: 0; }
+  h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+       color: var(--dim); margin: 0 0 10px; font-weight: 600; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+  .panel { background: var(--panel); border: 1px solid var(--line);
+           border-radius: 10px; padding: 14px; }
+  header { display: flex; justify-content: space-between; align-items: center;
+           gap: 12px; flex-wrap: wrap; margin-bottom: 14px; }
+  .pill { padding: 3px 10px; border-radius: 999px; font-size: 12px;
+          font-weight: 600; border: 1px solid var(--line); background: var(--panel2); }
+  .pill.live { background: rgba(229,72,77,.15); color: var(--down); border-color: var(--down); }
+  .pill.dry  { background: rgba(76,141,255,.15); color: var(--accent); border-color: var(--accent); }
+  .pill.on   { background: rgba(41,192,122,.15); color: var(--up); border-color: var(--up); }
+  .pill.off  { color: var(--dim); }
+  .kv { display: flex; justify-content: space-between; gap: 10px;
+        padding: 5px 0; border-bottom: 1px dashed var(--line); }
+  .kv:last-child { border-bottom: 0; }
+  .kv span:first-child { color: var(--dim); }
+  .kv span:last-child { font-variant-numeric: tabular-nums; font-weight: 600; }
+  .lights { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+  .light { text-align: center; padding: 8px 4px; border-radius: 8px;
+           background: var(--panel2); border: 1px solid var(--line); }
+  .light .tf { font-size: 11px; color: var(--dim); }
+  .light .dot { width: 12px; height: 12px; border-radius: 50%; margin: 5px auto;
+                background: var(--dim); }
+  .light.above .dot { background: var(--up); box-shadow: 0 0 8px rgba(41,192,122,.6); }
+  .light.below .dot { background: var(--down); box-shadow: 0 0 8px rgba(229,72,77,.6); }
+  .light .px { font-size: 10px; color: var(--dim); font-variant-numeric: tabular-nums; }
+  .steps { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 8px; }
+  .step { flex: 1; min-width: 58px; text-align: center; font-size: 10px; padding: 6px 2px;
+          border-radius: 6px; background: var(--panel2); border: 1px solid var(--line);
+          color: var(--dim); }
+  .step.done { background: rgba(41,192,122,.15); color: var(--up); border-color: var(--up); }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; color: var(--dim); font-weight: 600; padding: 5px 6px;
+       border-bottom: 1px solid var(--line); }
+  td { padding: 5px 6px; border-bottom: 1px solid var(--line);
+       font-variant-numeric: tabular-nums; }
+  button { background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+           border-radius: 7px; padding: 7px 13px; cursor: pointer; font-size: 13px;
+           font-family: inherit; }
+  button:hover:not(:disabled) { border-color: var(--accent); }
+  button:disabled { opacity: .4; cursor: not-allowed; }
+  button.danger { border-color: var(--down); color: var(--down); }
+  button.go { border-color: var(--up); color: var(--up); }
+  input[type=number] { background: var(--panel2); color: var(--text); font-family: inherit;
+                       border: 1px solid var(--line); border-radius: 7px;
+                       padding: 7px; width: 78px; }
+  #log { background: #0b0d11; border: 1px solid var(--line); border-radius: 8px;
+         padding: 10px; height: 230px; overflow-y: auto; font-size: 11.5px;
+         font-family: Consolas, "Courier New", monospace; white-space: pre-wrap;
+         color: #b9c1d1; }
+  .up { color: var(--up); } .down { color: var(--down); }
+  .warn { color: var(--warn); } .dim { color: var(--dim); }
+  .banner { padding: 9px 12px; border-radius: 8px; margin-bottom: 12px; font-size: 13px;
+            border: 1px solid var(--warn); background: rgba(232,163,61,.12); color: var(--warn); }
+  .big { font-size: 21px; font-weight: 700; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+<header>
+  <div class="row">
+    <h1>XAUUSD Robot <span class="dim">v1.1</span></h1>
+    <span id="p-running" class="pill off">stopped</span>
+    <span id="p-mode" class="pill dry">DRY RUN</span>
+    <span id="p-account" class="pill off">—</span>
+  </div>
+  <div class="row">
+    <button id="btn-start" class="go">Start</button>
+    <button id="btn-stop">Stop</button>
+    <button id="btn-arm" class="danger">Arm live trading</button>
+    <span class="dim" id="clock"></span>
+  </div>
+</header>
+
+<div id="banner" class="banner" style="display:none"></div>
+
+<div class="grid">
+  <div class="panel">
+    <h2>Six-timeframe EMA200 regime</h2>
+    <div class="row" style="margin-bottom:10px">
+      <span class="big" id="regime">—</span>
+      <span class="dim" id="regime-note"></span>
+    </div>
+    <div class="lights" id="lights"></div>
+  </div>
+
+  <div class="panel">
+    <h2>Price &amp; momentum</h2>
+    <div class="kv"><span>Bid / Ask</span><span id="px">—</span></div>
+    <div class="kv"><span>Spread</span><span id="spread">—</span></div>
+    <div class="kv"><span>ATR(14) M5</span><span id="atr">—</span></div>
+    <div class="kv"><span>Williams %R(49)</span><span id="wpr">—</span></div>
+    <div class="kv"><span>Last closed bar</span><span id="lastbar">—</span></div>
+  </div>
+
+  <div class="panel">
+    <h2>Setup state machine</h2>
+    <div class="row"><span class="big" id="sm-state">IDLE</span><span class="dim" id="sm-detail"></span></div>
+    <div class="steps" id="steps"></div>
+    <div style="margin-top:10px">
+      <div class="kv"><span>Zone</span><span id="sm-zone">—</span></div>
+      <div class="kv"><span>Confluence</span><span id="sm-conf">—</span></div>
+      <div class="kv"><span>Bars until expiry</span><span id="sm-expiry">—</span></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Account &amp; risk</h2>
+    <div class="kv"><span>Balance</span><span id="balance">—</span></div>
+    <div class="kv"><span>Equity</span><span id="equity">—</span></div>
+    <div class="kv"><span>Peak equity</span><span id="peak">—</span></div>
+    <div class="kv"><span>Drawdown (15% locks)</span><span id="dd">—</span></div>
+    <div class="kv"><span>Risk budget / trade</span><span id="riskbudget">—</span></div>
+    <div class="row" style="margin-top:10px">
+      <span class="dim">Risk %</span>
+      <input type="number" id="risk-input" step="0.5" min="0.5" max="10">
+      <button id="btn-risk">Set</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Circuit breakers</h2>
+    <div class="kv"><span>Trades today</span><span id="cb-trades">—</span></div>
+    <div class="kv"><span>Losses today</span><span id="cb-losses">—</span></div>
+    <div class="kv"><span>Daily realised R</span><span id="cb-r">—</span></div>
+    <div class="kv"><span>Cooldown</span><span id="cb-cool">—</span></div>
+    <div class="kv"><span>Drawdown lock</span><span id="cb-dd">—</span></div>
+    <div class="kv"><span>10x target lock</span><span id="cb-target">—</span></div>
+    <div class="row" style="margin-top:10px">
+      <button id="btn-reset-dd">Reset drawdown lock</button>
+      <button id="btn-reset-target">Reset target lock</button>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Open position</h2>
+    <div id="pos-empty" class="dim">No open position.</div>
+    <div id="pos-body" style="display:none">
+      <div class="kv"><span>Ticket</span><span id="pos-ticket">—</span></div>
+      <div class="kv"><span>Direction / volume</span><span id="pos-dir">—</span></div>
+      <div class="kv"><span>Open price</span><span id="pos-open">—</span></div>
+      <div class="kv"><span>Stop / target</span><span id="pos-sltp">—</span></div>
+      <div class="kv"><span>Floating P/L</span><span id="pos-pnl">—</span></div>
+      <button id="btn-close" class="danger" style="margin-top:10px">Close position now</button>
+    </div>
+    <div id="foreign" style="display:none; margin-top:12px; padding-top:10px; border-top:1px solid var(--line)">
+      <h2 style="margin-bottom:6px">Other positions (not this robot)</h2>
+      <div class="dim" style="font-size:12px; margin-bottom:6px">
+        These move account equity, so they count toward the 15% drawdown lock.
+      </div>
+      <table><tbody id="foreign-rows"></tbody></table>
+    </div>
+  </div>
+</div>
+
+<div class="grid" style="margin-top:12px">
+  <div class="panel">
+    <h2>Active zones <span id="zone-count" class="dim"></span></h2>
+    <div style="max-height:250px; overflow-y:auto">
+      <table>
+        <thead><tr><th>Type</th><th>Dir</th><th>Low</th><th>High</th><th>Age</th><th>Touched</th></tr></thead>
+        <tbody id="zones"></tbody>
+      </table>
+    </div>
+  </div>
+  <div class="panel">
+    <h2>Event log</h2>
+    <div id="log"></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let pinned = true;
+
+async function post(path, body) {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(body || {})
+  });
+  const data = await res.json();
+  if (data.error) showBanner(data.error);
+  else hideBanner();
+  refresh();
+  return data;
+}
+
+function showBanner(msg) { const b = $('banner'); b.textContent = msg; b.style.display = 'block'; }
+function hideBanner() { $('banner').style.display = 'none'; }
+
+$('btn-start').onclick = () => post('/api/start');
+$('btn-stop').onclick  = () => post('/api/stop');
+$('btn-close').onclick = () => confirm('Close the open position at market?') && post('/api/close-position');
+$('btn-reset-dd').onclick = () => confirm('Reset the 15% drawdown lock?\n\nThe blueprint requires a manual review before re-enabling.') && post('/api/reset-drawdown');
+$('btn-reset-target').onclick = () => confirm('Reset the 10x target lock?') && post('/api/reset-target');
+$('btn-risk').onclick = () => post('/api/risk', {risk_percent: parseFloat($('risk-input').value)});
+
+$('btn-arm').onclick = () => {
+  const arming = $('btn-arm').dataset.live !== 'true';
+  if (arming && !confirm('Arm LIVE order placement?\n\nThe robot will send real orders to the connected account on the next valid signal.')) return;
+  post('/api/mode', {live: arming});
+};
+
+function fmt(n, d = 2) {
+  return (n === null || n === undefined) ? '—'
+    : Number(n).toLocaleString(undefined, {minimumFractionDigits: d, maximumFractionDigits: d});
+}
+
+function render(s) {
+  $('clock').textContent = s.timestamp || '';
+
+  const run = $('p-running');
+  run.textContent = s.running ? 'running' : 'stopped';
+  run.className = 'pill ' + (s.running ? 'on' : 'off');
+
+  const mode = $('p-mode');
+  mode.textContent = s.mode === 'LIVE' ? 'LIVE ORDERS' : 'DRY RUN';
+  mode.className = 'pill ' + (s.mode === 'LIVE' ? 'live' : 'dry');
+  const arm = $('btn-arm');
+  arm.dataset.live = (s.mode === 'LIVE');
+  arm.textContent = s.mode === 'LIVE' ? 'Disarm (dry run)' : 'Arm live trading';
+
+  if (s.account) {
+    const a = s.account;
+    $('p-account').textContent = `${a.login} · ${a.server} · ${a.type}`;
+    $('p-account').className = 'pill ' + (a.type === 'DEMO' ? 'on' : 'live');
+    $('balance').textContent = fmt(a.balance) + ' ' + a.currency;
+    $('equity').textContent = fmt(a.equity) + ' ' + a.currency;
+    $('dd').innerHTML = `<span class="${a.drawdown_percent >= 15 ? 'down' : a.drawdown_percent >= 10 ? 'warn' : ''}">${fmt(a.drawdown_percent)}%</span>`;
+  }
+  if (s.price) {
+    $('px').textContent = `${fmt(s.price.bid)} / ${fmt(s.price.ask)}`;
+    $('spread').textContent = fmt(s.price.spread);
+  }
+
+  $('regime').textContent = s.regime || '—';
+  $('regime').className = 'big ' + (s.regime === 'BUY' ? 'up' : s.regime === 'SELL' ? 'down' : 'dim');
+  $('regime-note').textContent = s.regime === 'MIXED' ? 'no new trades while mixed' : 'all six aligned';
+
+  $('lights').innerHTML = (s.regime_lights || []).map(l => `
+    <div class="light ${l.side === 'ABOVE' ? 'above' : l.side === 'BELOW' ? 'below' : ''}">
+      <div class="tf">${l.timeframe}</div><div class="dot"></div>
+      <div class="px">${l.ema200 === null ? 'warm-up' : fmt(l.ema200)}</div>
+    </div>`).join('');
+
+  if (s.indicators) {
+    $('atr').textContent = fmt(s.indicators.atr);
+    const st = s.indicators.wpr_state;
+    $('wpr').innerHTML = `<span class="${st === 'OVERSOLD' ? 'up' : st === 'OVERBOUGHT' ? 'down' : ''}">${fmt(s.indicators.wpr, 1)} · ${st}</span>`;
+  }
+  $('lastbar').textContent = s.last_bar || '—';
+
+  const su = s.setup || {};
+  $('sm-state').textContent = su.state || 'IDLE';
+  $('sm-detail').textContent = su.direction ? su.direction + ' setup' : '';
+  $('sm-zone').textContent = su.zone_type ? `${su.zone_type} [${fmt(su.zone_low)} – ${fmt(su.zone_high)}]` : '—';
+  $('sm-conf').textContent = su.confluence ?? '—';
+  $('sm-expiry').textContent = su.bars_left ?? '—';
+  const steps = [
+    ['Zone reaction', !!su.direction],
+    ['WPR extreme', !!su.wpr_extreme_seen],
+    ['WPR exit', !!su.wpr_confirmed],
+    ['Push 1', !!su.push1],
+    ['Push 2', !!su.push2],
+  ];
+  $('steps').innerHTML = steps.map(([n, done]) => `<div class="step ${done ? 'done' : ''}">${n}</div>`).join('');
+
+  if (s.safety) {
+    const f = s.safety;
+    $('peak').textContent = fmt(f.equity_peak);
+    $('riskbudget').textContent = fmt(f.risk_budget) + ` (${s.risk_percent}%)`;
+    if ($('risk-input') !== document.activeElement) $('risk-input').value = s.risk_percent;
+    $('cb-trades').innerHTML = `${f.trades_today} / ${f.max_trades_per_day}`;
+    $('cb-losses').innerHTML = `${f.losses_today} / ${f.max_losses_per_day}`;
+    $('cb-r').innerHTML = `<span class="${f.daily_realized_r <= -2 ? 'down' : ''}">${fmt(f.daily_realized_r)}R</span>`;
+    $('cb-cool').innerHTML = f.cooldown_active ? '<span class="warn">active</span>' : 'clear';
+    $('cb-dd').innerHTML = f.drawdown_locked ? '<span class="down">LOCKED</span>' : 'clear';
+    $('cb-target').innerHTML = f.target_reached ? '<span class="down">REACHED</span>' : 'not reached';
+  }
+
+  const p = s.position;
+  $('pos-empty').style.display = p ? 'none' : 'block';
+  $('pos-body').style.display = p ? 'block' : 'none';
+  if (p) {
+    $('pos-ticket').textContent = '#' + p.ticket;
+    $('pos-dir').textContent = `${p.direction} ${p.volume}`;
+    $('pos-open').textContent = fmt(p.open_price);
+    $('pos-sltp').textContent = `${fmt(p.sl)} / ${fmt(p.tp)}`;
+    $('pos-pnl').innerHTML = `<span class="${p.profit >= 0 ? 'up' : 'down'}">${fmt(p.profit)}</span>`;
+  }
+
+  const foreign = s.foreign_positions || [];
+  $('foreign').style.display = foreign.length ? 'block' : 'none';
+  $('foreign-rows').innerHTML = foreign.map(f => `
+    <tr><td>#${f.ticket}</td><td>${f.symbol}</td>
+        <td class="${f.direction === 'BUY' ? 'up' : 'down'}">${f.direction}</td>
+        <td>${f.volume}</td>
+        <td class="${f.profit >= 0 ? 'up' : 'down'}">${fmt(f.profit)}</td></tr>`).join('');
+
+  const zones = s.zones || [];
+  $('zone-count').textContent = zones.length ? `(${zones.length} shown)` : '';
+  $('zones').innerHTML = zones.map(z => `
+    <tr><td>${z.type}</td>
+        <td class="${z.direction === 'BUY' ? 'up' : 'down'}">${z.direction}</td>
+        <td>${fmt(z.low)}</td><td>${fmt(z.high)}</td><td>${z.age}</td>
+        <td>${z.touched ? 'yes' : '—'}</td></tr>`).join('')
+    || '<tr><td colspan="6" class="dim">No active zones.</td></tr>';
+
+  const log = $('log');
+  pinned = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
+  log.textContent = (s.log || []).join('\n');
+  if (pinned) log.scrollTop = log.scrollHeight;
+
+  if (s.mt5_error) showBanner('MT5: ' + s.mt5_error);
+}
+
+async function refresh() {
+  try {
+    const res = await fetch('/api/status');
+    render(await res.json());
+  } catch (e) {
+    showBanner('dashboard lost contact with the robot process');
+  }
+}
+
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

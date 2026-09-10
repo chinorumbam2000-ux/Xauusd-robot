@@ -71,6 +71,29 @@ python -m xauusd_robot.cli split --data data/XAUUSD_M5_synthetic.csv --risk 1.0
 Bring your own data by exporting M5 bars to CSV with `time, open, high, low, close`
 (plus optional `volume` and `spread` in points). Column names are matched case-insensitively.
 
+### Localhost dashboard
+
+```powershell
+$env:MT5_LOGIN="your_login"; $env:MT5_SERVER="Broker-Demo"; $env:MT5_PASSWORD="..."
+python scripts/run_dashboard.py
+# then open http://127.0.0.1:8765
+```
+
+Runs the live trader in a background thread and serves a monitoring/control UI built on the
+standard library (no new dependency). It covers the blueprint's "Recommended Demo Dashboard":
+six EMA200 regime lights, live price/spread/ATR, Williams %R state, the setup state machine with
+its progress chips (zone reaction → WPR extreme → WPR exit → Push 1 → Push 2), active zones with
+age and confluence, risk budget and sizing, every circuit breaker with manual reset buttons, the
+open position with a close control, and a live event log.
+
+The robot starts in **dry run**; arming live orders is an explicit button that refuses non-demo
+accounts and refuses to arm while the terminal's AutoTrading switch is off. The server binds to
+loopback only — its control endpoints mutate a live trading session, so never expose it to a
+network.
+
+Positions the robot does not own (different magic number) are listed separately, because they
+still move account equity and therefore count toward the 15% peak-equity lockout.
+
 ### Real data from MetaTrader 5
 
 `scripts/fetch_mt5_data.py` pulls real M5 history and the broker's live symbol specification

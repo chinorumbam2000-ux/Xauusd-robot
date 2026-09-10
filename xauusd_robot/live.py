@@ -23,10 +23,12 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 import time
+from collections import deque
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Callable, Optional
 
 import pandas as pd
 
@@ -74,6 +76,20 @@ class LiveTrader:
         self.bars: Optional[pd.DataFrame] = None
         self.last_bar_time: Optional[pd.Timestamp] = None
         self.open_ticket: Optional[int] = None
+        self.open_risk_money: float = 0.0
+
+        # Dashboard support: a rolling log tail and a coarse status flag so a
+        # supervising UI can render what the loop is doing without scraping stdout.
+        self.log_lines: deque = deque(maxlen=400)
+        self.status: str = "idle"
+        self.account = None
+        self.symbol_info = None
+        self._lock = threading.Lock()
+
+    def _log(self, message: str) -> None:
+        line = f"[{self._now()}] {message}"
+        print(line, flush=True)
+        self.log_lines.append(line)
 
     @staticmethod
     def _import_mt5():
@@ -271,8 +287,8 @@ class LiveTrader:
 
         self.safety.register_trade_close(r_multiple, balance, bar_index)
         self.sm.on_trade_closed()
-        print(f"  [{self._now()}] position #{self.open_ticket} closed: "
-              f"{profit:+,.2f} ({r_multiple:+.2f}R), balance {balance:,.2f}")
+        self._log(f"position #{self.open_ticket} closed: {profit:+,.2f} "
+                  f"({r_multiple:+.2f}R), balance {balance:,.2f}")
         self.logger.log_trade(
             exit_time=pd.Timestamp.utcnow(), ticket=self.open_ticket,
             pnl_money=profit, r_multiple=r_multiple, balance_after=balance,
@@ -321,9 +337,9 @@ class LiveTrader:
                 for event in events:
                     if event.direction == regime.value:
                         self.sm.arm(event)
-                        print(f"  [{self._now()}] setup armed: {event.direction} from "
-                              f"{event.zone.type.value} zone [{event.zone.low:.2f}, {event.zone.high:.2f}], "
-                              f"confluence {event.confluence_score}")
+                        self._log(f"setup armed: {event.direction} from {event.zone.type.value} "
+                                  f"zone [{event.zone.low:.2f}, {event.zone.high:.2f}], "
+                                  f"confluence {event.confluence_score}")
                         break
 
         self.persist_state()
@@ -350,7 +366,7 @@ class LiveTrader:
             target_price = entry - cfg.reward_risk * stop_distance
 
         def reject(reason: str) -> None:
-            print(f"  [{self._now()}] entry REJECTED ({reason})")
+            self._log(f"entry REJECTED ({reason})")
             self.logger.log_event(time=self.last_bar_time, event="entry_rejected", reason=reason,
                                   direction=setup.direction, entry=entry, stop=stop_price)
             self.sm.cancel()
@@ -396,7 +412,7 @@ class LiveTrader:
                    f"(risk {lot.normalized_risk:,.2f}, {stop_distance:.2f} stop)")
 
         if not self.live:
-            print(f"  [{self._now()}] DRY RUN would place: {summary}")
+            self._log(f"DRY RUN would place: {summary}")
             self.logger.log_event(time=self.last_bar_time, event="dry_run_order", reason="ok", **request)
             self.sm.cancel()
             return
@@ -405,7 +421,7 @@ class LiveTrader:
         if result is None or result.retcode != self.mt5.TRADE_RETCODE_DONE:
             code = "none" if result is None else result.retcode
             comment = "" if result is None else result.comment
-            print(f"  [{self._now()}] ORDER FAILED (retcode {code} {comment}): {summary}")
+            self._log(f"ORDER FAILED (retcode {code} {comment}): {summary}")
             self.logger.log_event(time=self.last_bar_time, event="order_failed",
                                   reason=str(code), comment=comment, **request)
             self.sm.cancel()
@@ -415,7 +431,7 @@ class LiveTrader:
         self.open_risk_money = lot.normalized_risk
         self.safety.register_trade_open()
         self.sm.on_trade_opened()
-        print(f"  [{self._now()}] ORDER PLACED #{result.order}: {summary}")
+        self._log(f"ORDER PLACED #{result.order}: {summary}")
         self.logger.log_event(time=self.last_bar_time, event="order_placed", reason="ok",
                               ticket=result.order, risk_money=lot.normalized_risk, **request)
         self.persist_state()
@@ -434,31 +450,231 @@ class LiveTrader:
         return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     # ------------------------------------------------------------------
-    def run(self, max_bars: Optional[int] = None) -> None:
-        print("\n--- live loop started; Ctrl+C to stop ---")
-        print(f"    expect long quiet periods: this strategy averaged ~1.7 trades/month "
-              f"in backtest\n")
+    def snapshot(self) -> dict:
+        """Everything a dashboard needs to render, per Section 12."""
+        with self._lock:
+            snap: dict = {
+                "status": self.status,
+                "mode": "LIVE" if self.live else "DRY_RUN",
+                "symbol": self.symbol,
+                "risk_percent": self.config.risk_percent_initial_balance,
+                "log": list(self.log_lines)[-120:],
+                "timestamp": self._now(),
+            }
+            if self.bars is None:
+                return snap
+
+            i = len(self.bars) - 1
+            regime = self._regime_at(i)
+            snap["last_bar"] = str(self.last_bar_time)
+            snap["regime"] = regime.value
+
+            # Six EMA200 regime lights.
+            lights = []
+            for tf in self.config.regime_timeframes:
+                close = self.regime_frame[f"{tf}_close"].iloc[i]
+                ema = self.regime_frame[f"{tf}_ema"].iloc[i]
+                if pd.isna(close) or pd.isna(ema):
+                    side = "UNKNOWN"
+                else:
+                    side = "ABOVE" if close > ema else ("BELOW" if close < ema else "ON")
+                lights.append({
+                    "timeframe": tf,
+                    "close": None if pd.isna(close) else round(float(close), 2),
+                    "ema200": None if pd.isna(ema) else round(float(ema), 2),
+                    "side": side,
+                })
+            snap["regime_lights"] = lights
+
+            wpr = float(self.bars["wpr"].iloc[i])
+            atr = float(self.bars["atr"].iloc[i])
+            snap["indicators"] = {
+                "wpr": round(wpr, 1),
+                "atr": round(atr, 2),
+                "wpr_state": (
+                    "OVERSOLD" if wpr <= self.config.wpr_oversold
+                    else "OVERBOUGHT" if wpr >= self.config.wpr_overbought
+                    else "NORMAL"
+                ),
+            }
+
+            # Setup state machine.
+            setup_info = {"state": self.sm.state.value}
+            if self.sm.setup is not None:
+                s = self.sm.setup
+                setup_info.update({
+                    "direction": s.direction,
+                    "zone_type": s.zone.type.value,
+                    "zone_low": round(s.zone.low, 2),
+                    "zone_high": round(s.zone.high, 2),
+                    "confluence": s.confluence_score,
+                    "bars_left": max(0, s.expiry_bar - i),
+                    "wpr_extreme_seen": s.wpr_extreme_seen,
+                    "wpr_confirmed": s.wpr_confirmed,
+                    "push1": s.push1_bar is not None,
+                    "push2": s.push2_bar is not None,
+                })
+            snap["setup"] = setup_info
+
+            snap["zones"] = [
+                {
+                    "id": z.id, "type": z.type.value, "direction": z.direction,
+                    "low": round(z.low, 2), "high": round(z.high, 2),
+                    "age": i - z.created_bar, "touched": z.touched,
+                }
+                for z in sorted(self.zone_engine.active_zones, key=lambda z: -z.created_bar)[:25]
+            ]
+
+            state = self.safety.state
+            peak = state.running_equity_peak or 1.0
+            snap["safety"] = {
+                "initial_balance": round(state.initial_balance, 2),
+                "closed_balance": round(state.closed_balance, 2),
+                "equity_peak": round(peak, 2),
+                "trades_today": state.trades_today,
+                "losses_today": state.losses_today,
+                "daily_realized_r": round(state.daily_realized_r, 2),
+                "open_positions": state.open_positions,
+                "cooldown_until_bar": state.cooldown_until_bar,
+                "cooldown_active": i < state.cooldown_until_bar,
+                "drawdown_locked": state.drawdown_locked,
+                "target_reached": state.target_reached,
+                "risk_budget": round(state.initial_balance * self.config.risk_fraction(), 2),
+                "max_trades_per_day": self.config.max_trades_per_day,
+                "max_losses_per_day": self.config.max_losses_per_day,
+            }
+
+        # MT5 calls outside the lock -- they can block on the terminal.
+        try:
+            account = self.mt5.account_info()
+            tick = self.mt5.symbol_info_tick(self.symbol)
+            if account:
+                equity = account.equity
+                snap["account"] = {
+                    "login": account.login, "server": account.server,
+                    "type": TRADE_MODES.get(account.trade_mode, "UNKNOWN"),
+                    "balance": round(account.balance, 2),
+                    "equity": round(equity, 2),
+                    "currency": account.currency,
+                    "drawdown_percent": round(max(0.0, (1 - equity / peak) * 100), 2),
+                }
+            if tick:
+                snap["price"] = {
+                    "bid": tick.bid, "ask": tick.ask,
+                    "spread": round(tick.ask - tick.bid, 2),
+                }
+            all_positions = self.mt5.positions_get() or []
+            positions = [
+                p for p in all_positions if p.magic == MAGIC and p.symbol == self.symbol
+            ]
+            # Positions this robot does not own still move account equity, and the
+            # peak-equity circuit breaker reads account equity -- so manual trades
+            # can trip the robot's lock. Surface them rather than hiding them.
+            foreign = [p for p in all_positions if p.magic != MAGIC]
+            snap["foreign_positions"] = [
+                {
+                    "ticket": p.ticket, "symbol": p.symbol,
+                    "direction": "BUY" if p.type == 0 else "SELL",
+                    "volume": p.volume, "profit": round(p.profit, 2),
+                }
+                for p in foreign
+            ]
+            snap["position"] = (
+                {
+                    "ticket": positions[0].ticket,
+                    "direction": "BUY" if positions[0].type == 0 else "SELL",
+                    "volume": positions[0].volume,
+                    "open_price": positions[0].price_open,
+                    "sl": positions[0].sl, "tp": positions[0].tp,
+                    "profit": round(positions[0].profit, 2),
+                }
+                if positions else None
+            )
+        except Exception as exc:
+            snap["mt5_error"] = f"{type(exc).__name__}: {exc}"
+        return snap
+
+    # ------------------------------------------------------------------
+    def set_live(self, live: bool) -> str:
+        """Arm or disarm real order placement while the loop runs."""
+        if live:
+            terminal = self.mt5.terminal_info()
+            if terminal is None or not terminal.trade_allowed:
+                return "AutoTrading is OFF in the MT5 terminal -- enable the Algo Trading button first."
+            account = self.mt5.account_info()
+            mode = TRADE_MODES.get(account.trade_mode, "UNKNOWN") if account else "UNKNOWN"
+            if mode != "DEMO" and not self.allow_real_money:
+                return f"refusing to arm live trading on a {mode} account."
+        self.live = live
+        self._log(f"mode changed to {'LIVE ORDER PLACEMENT' if live else 'DRY RUN'}")
+        return ""
+
+    def close_position(self) -> str:
+        """Manually flatten the robot's open position."""
+        positions = [
+            p for p in (self.mt5.positions_get(symbol=self.symbol) or []) if p.magic == MAGIC
+        ]
+        if not positions:
+            return "no open position"
+        p = positions[0]
+        tick = self.mt5.symbol_info_tick(self.symbol)
+        request = {
+            "action": self.mt5.TRADE_ACTION_DEAL,
+            "symbol": self.symbol,
+            "volume": p.volume,
+            "type": self.mt5.ORDER_TYPE_SELL if p.type == 0 else self.mt5.ORDER_TYPE_BUY,
+            "position": p.ticket,
+            "price": tick.bid if p.type == 0 else tick.ask,
+            "deviation": 20,
+            "magic": MAGIC,
+            "comment": "manual close from dashboard",
+            "type_time": self.mt5.ORDER_TIME_GTC,
+            "type_filling": self._filling_mode(),
+        }
+        result = self.mt5.order_send(request)
+        if result is None or result.retcode != self.mt5.TRADE_RETCODE_DONE:
+            message = f"close failed: retcode {getattr(result, 'retcode', None)}"
+            self._log(message)
+            return message
+        self._log(f"position #{p.ticket} closed manually from dashboard")
+        return ""
+
+    # ------------------------------------------------------------------
+    def run(self, max_bars: Optional[int] = None, stop_event: Optional[threading.Event] = None,
+            shutdown_on_exit: bool = True) -> None:
+        self._log("live loop started")
+        self._log("expect long quiet periods: this strategy averaged ~1.7 trades/month in backtest")
+        self.status = "running"
         processed = 0
         try:
             while max_bars is None or processed < max_bars:
+                if stop_event is not None and stop_event.is_set():
+                    break
                 try:
                     latest = self._fetch_bars(3)
                     newest_closed = latest.index[-2]
                     if newest_closed > self.last_bar_time:
-                        self.on_new_bar()
+                        with self._lock:
+                            self.on_new_bar()
                         processed += 1
-                        state = self.sm.state.value
-                        print(f"  [{self._now()}] bar {self.last_bar_time} processed "
-                              f"| regime {self._regime_at(len(self.bars) - 1).value} "
-                              f"| state {state}")
+                        self._log(f"bar {self.last_bar_time} processed | "
+                                  f"regime {self._regime_at(len(self.bars) - 1).value} | "
+                                  f"state {self.sm.state.value}")
                 except Exception as exc:  # keep the loop alive across transient errors
-                    print(f"  [{self._now()}] WARNING: {type(exc).__name__}: {exc}")
-                time.sleep(self.poll_seconds)
+                    self._log(f"WARNING: {type(exc).__name__}: {exc}")
+
+                # Sleep in slices so a stop request is honoured promptly.
+                for _ in range(max(1, self.poll_seconds)):
+                    if stop_event is not None and stop_event.is_set():
+                        break
+                    time.sleep(1)
         except KeyboardInterrupt:
-            print("\n--- stopped by user ---")
+            self._log("stopped by user")
         finally:
+            self.status = "stopped"
             self.persist_state()
             if self.logger.events or self.logger.trades:
                 self.logger.write(self.log_dir)
-                print(f"session logs written to {self.log_dir}")
-            self.mt5.shutdown()
+                self._log(f"session logs written to {self.log_dir}")
+            if shutdown_on_exit:
+                self.mt5.shutdown()
