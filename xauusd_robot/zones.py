@@ -73,6 +73,21 @@ class ReactionEvent:
 class ZoneEngine:
     def __init__(self, config, bars: pd.DataFrame):
         self.config = config
+        self.update_bars(bars)
+
+        self.active_zones: List[Zone] = []
+        self.all_zones: List[Zone] = []
+        self._next_id = itertools.count(1)
+        self._ob_candidates: Dict[str, int] = {}  # {"bull"|"bear": candidate bar index}
+
+    def update_bars(self, bars: pd.DataFrame) -> None:
+        """Refresh cached arrays without disturbing zone lifecycle state.
+
+        Live trading appends one closed bar at a time; zones hold integer bar
+        indices, so bars may only ever be appended, never trimmed from the
+        front. Pivots are recomputed because the newest bars can confirm a
+        pivot that was still pending.
+        """
         self.index = bars.index
         self.open = bars["open"].to_numpy()
         self.high = bars["high"].to_numpy()
@@ -84,22 +99,18 @@ class ZoneEngine:
 
         from .structure import confirmed_pivots, last_confirmed_value
 
+        cfg = self.config
         pivot_high, pivot_low = confirmed_pivots(
-            bars["high"], bars["low"], config.sr_pivot_left, config.sr_pivot_right
+            bars["high"], bars["low"], cfg.sr_pivot_left, cfg.sr_pivot_right
         )
         self.pivot_high = pivot_high.to_numpy()
         self.pivot_low = pivot_low.to_numpy()
         self.swing_high_asof = last_confirmed_value(
-            pivot_high, bars["high"], config.sr_pivot_right
+            pivot_high, bars["high"], cfg.sr_pivot_right
         ).to_numpy()
         self.swing_low_asof = last_confirmed_value(
-            pivot_low, bars["low"], config.sr_pivot_right
+            pivot_low, bars["low"], cfg.sr_pivot_right
         ).to_numpy()
-
-        self.active_zones: List[Zone] = []
-        self.all_zones: List[Zone] = []
-        self._next_id = itertools.count(1)
-        self._ob_candidates: Dict[str, int] = {}  # {"bull"|"bear": candidate bar index}
 
     def _new_zone(self, ztype: ZoneType, direction: str, low: float, high: float, created_bar: int) -> Zone:
         z = Zone(

@@ -11,6 +11,9 @@ data/*.csv
 results/
 *.png
 
+# Live runtime state: account balances, equity peak, lock flags
+state/
+
 # Editor / OS
 .vscode/
 .idea/

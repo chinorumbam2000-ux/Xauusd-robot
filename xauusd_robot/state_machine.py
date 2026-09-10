@@ -68,14 +68,22 @@ class SetupOutcome:
 class SetupStateMachine:
     def __init__(self, config, bars: pd.DataFrame):
         self.config = config
+        self.update_bars(bars)
+        self.setup: Optional[Setup] = None
+        self.state: SetupState = SetupState.IDLE
+
+    def update_bars(self, bars: pd.DataFrame) -> None:
+        """Refresh cached arrays without disturbing the armed setup.
+
+        Used by the live loop, which appends one closed bar at a time. Bars
+        may only be appended: an armed setup holds integer bar indices.
+        """
         self.index = bars.index
         self.open = bars["open"].to_numpy()
         self.high = bars["high"].to_numpy()
         self.low = bars["low"].to_numpy()
         self.close = bars["close"].to_numpy()
         self.wpr = bars["wpr"].to_numpy()
-        self.setup: Optional[Setup] = None
-        self.state: SetupState = SetupState.IDLE
 
     # ------------------------------------------------------------------
     @property
