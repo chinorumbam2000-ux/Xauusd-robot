@@ -44,11 +44,13 @@ class Supervisor:
         if self.running:
             return "already running"
         self.stop_event = threading.Event()
+        kwargs = {"stop_event": self.stop_event}
+        if isinstance(self.trader, LiveTrader):
+            # The dashboard owns the terminal connection; the loop must not
+            # close it when a single-symbol trader stops.
+            kwargs["shutdown_on_exit"] = False
         self.thread = threading.Thread(
-            target=self.trader.run,
-            kwargs={"stop_event": self.stop_event, "shutdown_on_exit": False},
-            daemon=True,
-            name="live-trader",
+            target=self.trader.run, kwargs=kwargs, daemon=True, name="live-trader",
         )
         self.thread.start()
         return ""
@@ -93,6 +95,33 @@ class Handler(BaseHTTPRequestHandler):
         except json.JSONDecodeError:
             return {}
 
+    # -- multi-symbol helpers ------------------------------------------
+    def _symbol_trader(self, symbol):
+        trader = self.supervisor.trader
+        if isinstance(trader, LiveTrader):
+            return trader if (symbol in (None, trader.symbol)) else None
+        return trader.traders.get(symbol) if symbol else None
+
+    def _reset(self, which: str) -> str:
+        """Clear a lock at whichever level owns it."""
+        trader = self.supervisor.trader
+        targets = [trader] if isinstance(trader, LiveTrader) else list(trader.traders.values())
+        for t in targets:
+            if which == "drawdown":
+                t.safety.manual_reset_drawdown_lock()
+            else:
+                t.safety.manual_reset_target()
+            t.persist_state()
+            t._log(f"{which} lock manually reset from dashboard")
+        portfolio = getattr(trader, "portfolio", None)
+        if portfolio is not None:
+            if which == "drawdown":
+                portfolio.reset_drawdown_lock()
+            else:
+                portfolio.reset_target()
+            trader.persist_portfolio()
+        return ""
+
     # -- routes --------------------------------------------------------
     def do_GET(self) -> None:
         path = urlparse(self.path).path
@@ -125,24 +154,25 @@ class Handler(BaseHTTPRequestHandler):
                 value = float(body.get("risk_percent"))
                 if not 0 < value <= 10:
                     raise ValueError
-                trader.config = replace(trader.config, risk_percent_initial_balance=value)
-                trader.safety.config = trader.config
-                trader._log(f"risk set to {value}% of initial balance")
+                targets = ([trader] if isinstance(trader, LiveTrader)
+                           else list(trader.traders.values()))
+                for t in targets:
+                    t.config = replace(t.config, risk_percent_initial_balance=value)
+                    t.safety.config = t.config
+                    t._log(f"risk set to {value}% of initial balance")
+                if not isinstance(trader, LiveTrader):
+                    trader.risk_percent = value
                 error = ""
             except (TypeError, ValueError):
                 error = "risk_percent must be a number between 0 and 10"
         elif path == "/api/close-position":
-            error = trader.close_position()
+            symbol = body.get("symbol")
+            target = self._symbol_trader(symbol)
+            error = target.close_position() if target else f"unknown symbol {symbol!r}"
         elif path == "/api/reset-drawdown":
-            trader.safety.manual_reset_drawdown_lock()
-            trader.persist_state()
-            trader._log("drawdown lock manually reset from dashboard")
-            error = ""
+            error = self._reset("drawdown")
         elif path == "/api/reset-target":
-            trader.safety.manual_reset_target()
-            trader.persist_state()
-            trader._log("target lock manually reset from dashboard")
-            error = ""
+            error = self._reset("target")
         else:
             self._send(404, b"not found", "text/plain")
             return

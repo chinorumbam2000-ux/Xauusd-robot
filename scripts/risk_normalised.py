@@ -44,6 +44,19 @@ CONFIGS = {
     "H1 only + F": ("H1",),
 }
 
+#: Rule-set candidates from scripts/combinations.py, compared at equal
+#: drawdown risk rather than equal risk percent.
+RULE_SETS = {
+    "baseline": {},
+    "A no-swing-break": {"ob_require_swing_break": False},
+    "C A+expiry8": {"ob_require_swing_break": False, "setup_expiry_bars": 8},
+    "E A+lead5+expiry8+sr.15": {
+        "ob_require_swing_break": False, "wpr_max_lead_bars": 5,
+        "setup_expiry_bars": 8, "sr_zone_atr": 0.15,
+    },
+    "F E+push.65": COMBO_F,
+}
+
 RISKS = (0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0)
 
 
@@ -54,19 +67,30 @@ def main() -> None:
     parser.add_argument("--broker", choices=("default", "deriv"), default="deriv")
     parser.add_argument("--dd-budget", type=float, default=12.0,
                         help="max drawdown %% allowed, kept under the 15%% lockout")
+    parser.add_argument("--rule-sets", action="store_true",
+                        help="compare rule-set candidates A-F instead of timeframe sets")
     args = parser.parse_args()
 
     m5 = load_m5_csv(args.data)
     broker = DERIV_XAUUSD if args.broker == "deriv" else BrokerSpec()
 
+    if args.rule_sets:
+        variants = {label: overrides for label, overrides in RULE_SETS.items()}
+        make = lambda overrides, risk: replace(  # noqa: E731
+            StrategyConfig(broker=broker), risk_percent_initial_balance=risk, **overrides
+        )
+    else:
+        variants = CONFIGS
+        make = lambda timeframes, risk: replace(  # noqa: E731
+            StrategyConfig(broker=broker), regime_timeframes=timeframes,
+            risk_percent_initial_balance=risk, **COMBO_F,
+        )
+
     detail, best = [], []
-    for label, timeframes in CONFIGS.items():
+    for label, spec in variants.items():
         rows = []
         for risk in RISKS:
-            config = replace(
-                StrategyConfig(broker=broker), regime_timeframes=timeframes,
-                risk_percent_initial_balance=risk, **COMBO_F,
-            )
+            config = make(spec, risk)
             m = run(m5, config, args.balance).metrics
             row = {
                 "config": label, "risk_%": risk, "trades": m["trades"],

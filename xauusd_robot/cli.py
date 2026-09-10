@@ -208,6 +208,66 @@ def cmd_walk_forward(args) -> None:
           "window is not persistence.")
 
 
+def cmd_learning(args) -> None:
+    """Report what live results say so far, and what they cannot yet say."""
+    from .adaptive import DEFAULT_EXPECTATION, PerformanceTracker, TradeLedger
+
+    ledger = TradeLedger(args.ledger).load()
+    tracker = PerformanceTracker(ledger, DEFAULT_EXPECTATION)
+    report = tracker.assess()
+
+    print(f"\n=== Live learning status ({args.ledger}) ===")
+    for key in ("verdict", "live_trades", "live_win_rate", "win_rate_ci_95",
+                "live_expectancy_r", "live_total_r", "expected_win_rate",
+                "expected_expectancy_r", "break_even_win_rate"):
+        if key in report:
+            print(f"  {key:<24} {report[key]}")
+    print(f"\n  {report['detail']}")
+
+    print("\n=== How much data buys how much certainty ===")
+    print(pd.DataFrame(tracker.precision_table()).to_string(index=False))
+
+    print(f"\n  Auto-tuning: {report['auto_tuning']}")
+    if report["trades_until_refit"]:
+        print(f"  {report['trades_until_refit']} more trades before `reoptimise` "
+              f"can say anything defensible.")
+    else:
+        print("  Sample is large enough to re-run the sweep including live trades.")
+
+
+def cmd_reoptimise(args) -> None:
+    """Re-run the parameter sweep including live results -- report only.
+
+    Nothing is applied automatically. Section 10's selection rule is a broad
+    plateau across neighbouring values, which a human has to look at.
+    """
+    from .adaptive import DEFAULT_EXPECTATION, PerformanceTracker, TradeLedger
+
+    ledger = TradeLedger(args.ledger).load()
+    tracker = PerformanceTracker(ledger, DEFAULT_EXPECTATION)
+    report = tracker.assess()
+    n = report["live_trades"]
+
+    print(f"\nlive trades in ledger: {n}")
+    if n < tracker.MIN_TRADES_FOR_REFIT and not args.force:
+        print(f"\nREFUSING to re-optimise on {n} trades.")
+        print(f"  {tracker.MIN_TRADES_FOR_REFIT} is the minimum for a defensible re-fit; at "
+              f"~5 trades a month that is {(tracker.MIN_TRADES_FOR_REFIT - n) / 5:.0f} more months.")
+        print("  Re-fitting on a smaller sample fits noise, and would do so repeatedly.")
+        print("  Pass --force to override, understanding that.")
+        return
+
+    print("\nLive results:")
+    print(f"  win rate {report.get('live_win_rate')}% "
+          f"(95% CI {report.get('win_rate_ci_95')}), expectancy "
+          f"{report.get('live_expectancy_r')}R")
+    print(f"  verdict: {report['verdict']} -- {report['detail']}")
+    print("\nRun scripts/experiments.py and scripts/combinations.py against a data file")
+    print("that now includes the live period, then compare against the current config.")
+    print("Apply a change only if it holds across walk-forward windows, not because")
+    print("it raises the aggregate.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="xauusd_robot", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -244,6 +304,17 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--train-bars", type=int, default=80000)
     p.add_argument("--test-bars", type=int, default=20000)
     p.set_defaults(func=cmd_walk_forward)
+
+    # These two read the live ledger and need no market data file.
+    p = sub.add_parser("learning")
+    p.add_argument("--ledger", default="state/trade_ledger.json")
+    p.set_defaults(func=cmd_learning)
+
+    p = sub.add_parser("reoptimise")
+    p.add_argument("--ledger", default="state/trade_ledger.json")
+    p.add_argument("--force", action="store_true",
+                   help="re-fit on an inadequate sample anyway")
+    p.set_defaults(func=cmd_reoptimise)
 
     return parser
 

@@ -323,7 +323,13 @@ class Backtester:
             self._reject(i, setup, lot.reason, {**snapshot, "raw_lots": lot.raw_lots})
             return
 
-        required_margin = lot.normalized_lots * cfg.broker.contract_size * entry_price / cfg.broker.leverage
+        # Notional must be expressed in the account currency. Using the symbol's
+        # own price is only right when the quote currency IS the account
+        # currency; margin_base_rate overrides it for USD-base pairs and crosses.
+        base_rate = cfg.broker.margin_base_rate
+        if base_rate is None:
+            base_rate = entry_price
+        required_margin = lot.normalized_lots * cfg.broker.contract_size * base_rate / cfg.broker.leverage
         equity = self._current_equity(i)
         if required_margin > equity:
             self._reject(i, setup, "insufficient_margin", {**snapshot, "required_margin": required_margin})

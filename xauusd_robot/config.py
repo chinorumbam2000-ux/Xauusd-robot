@@ -10,7 +10,7 @@ instances.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Tuple
+from typing import Optional, Tuple
 
 
 @dataclass(frozen=True)
@@ -31,6 +31,14 @@ class BrokerSpec:
     volume_max: float = 100.0
     leverage: float = 100.0  # used only for the "margin unavailable" rejection test
     default_spread_points: float = 20.0  # 0.20 price units, used when no spread column present
+    #: Account-currency value of one unit of the symbol's BASE currency, used
+    #: only by the margin test. None means "use the current price", which is
+    #: correct whenever the QUOTE currency is the account currency -- XAUUSD,
+    #: EURUSD and GBPUSD on a USD account. It is wrong for a USD-base pair like
+    #: USDJPY, whose notional is already in USD and must not be multiplied by
+    #: 154, and for a cross like EURGBP, whose base converts through a third
+    #: rate rather than through its own price.
+    margin_base_rate: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -138,7 +146,71 @@ DERIV_XAUUSD = BrokerSpec(
 #:     replace(StrategyConfig(), regime_timeframes=BLUEPRINT_REGIME_TIMEFRAMES)
 BLUEPRINT_REGIME_TIMEFRAMES: Tuple[str, ...] = ("D1", "H4", "H1", "M30", "M15", "M5")
 
+#: Broker specifications read from the live Deriv terminal. Section 5.3 requires
+#: these to come from the broker rather than being assumed, so they are recorded
+#: here only for offline backtesting -- the live path always re-reads them.
+#:
+#: tick_value for a pair whose quote currency is not the account currency
+#: (USDJPY, EURGBP here) moves with the exchange rate. The values below are
+#: point-in-time and are an approximation in backtests; live trading reads the
+#: current value per order.
+SYMBOL_SPECS = {
+    "XAUUSD": DERIV_XAUUSD,
+    "GBPUSD": BrokerSpec(symbol="GBPUSD", contract_size=100000.0, tick_size=0.00001,
+                         tick_value=1.0, volume_step=0.01, volume_min=0.01, volume_max=20.0,
+                         leverage=100.0, default_spread_points=3.0),
+    "EURUSD": BrokerSpec(symbol="EURUSD", contract_size=100000.0, tick_size=0.00001,
+                         tick_value=1.0, volume_step=0.01, volume_min=0.01, volume_max=20.0,
+                         leverage=100.0, default_spread_points=2.0),
+    # Base currency IS the account currency, so notional is already in USD.
+    "USDJPY": BrokerSpec(symbol="USDJPY", contract_size=100000.0, tick_size=0.001,
+                         tick_value=0.64704, volume_step=0.01, volume_min=0.01, volume_max=20.0,
+                         leverage=100.0, default_spread_points=3.0, margin_base_rate=1.0),
+    # A cross: EUR converts to USD through EURUSD, not through EURGBP's price.
+    "EURGBP": BrokerSpec(symbol="EURGBP", contract_size=100000.0, tick_size=0.00001,
+                         tick_value=1.35084, volume_step=0.01, volume_min=0.01, volume_max=20.0,
+                         leverage=100.0, default_spread_points=3.0, margin_base_rate=1.16),
+}
+
+#: Symbols the live robot is allowed to trade.
+TRADEABLE_SYMBOLS: Tuple[str, ...] = ("XAUUSD", "GBPUSD", "EURUSD", "USDJPY", "EURGBP")
+
 #: Research matrix from Section 10 / 17.2 -- compare, never cherry-pick.
 RISK_TEST_MATRIX: Tuple[float, ...] = (0.5, 1.0, 2.0, 3.0, 5.0)
 
 DEFAULT_CONFIG = StrategyConfig()
+
+#: "Combination F" -- the rule set selected by scripts/combinations.py and
+#: confirmed by scripts/risk_normalised.py, which compares candidates at equal
+#: drawdown risk rather than equal risk percent.
+#:
+#: On 100,000 real Deriv M5 bars, held to a 12% drawdown budget, F returned
+#: 165.1% against 114.7% for the next best and 94.1% for the untouched
+#: baseline. Every walk-forward window was profitable and the worst was +5.0R.
+#:
+#: These are deviations from blueprint v1.1 and were selected by searching
+#: roughly eighty configurations against a single 517-day sample, so some of
+#: the measured advantage is selection luck. StrategyConfig() keeps the
+#: blueprint values so the acceptance tests still test the specification.
+COMBINATION_F = {
+    "ob_require_swing_break": False,   # 4.2 structure break no longer mandatory
+    "wpr_max_lead_bars": 5,            # was 2
+    "setup_expiry_bars": 8,            # was 5
+    "sr_zone_atr": 0.15,               # was 0.10
+    "push_body_ratio": 0.65,           # was 0.60 -- the one TIGHTENING
+}
+
+
+def live_config(risk_percent: float = 2.0, broker: BrokerSpec | None = None) -> StrategyConfig:
+    """The configuration the live/demo robot runs.
+
+    Risk defaults to 2%, not the 3% that maximised backtest return. At 3% the
+    historical drawdown reached 11.15% against a 15% hard lockout, leaving
+    almost no margin -- any deterioration switches the robot off. 2% returned
+    108.8% with an 8.48% drawdown, which keeps real headroom.
+    """
+    return StrategyConfig(
+        broker=broker or DERIV_XAUUSD,
+        risk_percent_initial_balance=risk_percent,
+        **COMBINATION_F,
+    )

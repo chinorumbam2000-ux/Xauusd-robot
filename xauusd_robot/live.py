@@ -61,9 +61,15 @@ class LiveTrader:
         live: bool = False,
         allow_real_money: bool = False,
         poll_seconds: int = 10,
+        portfolio=None,
+        ledger=None,
     ):
         self.config = config
         self.symbol = symbol
+        #: Shared across symbols when several traders run together: caps total
+        #: open positions and refuses correlated ones. None means solo trading.
+        self.portfolio = portfolio
+        self.ledger = ledger
         self.history_bars = history_bars
         self.state_path = state_path
         self.log_dir = log_dir
@@ -77,6 +83,7 @@ class LiveTrader:
         self.last_bar_time: Optional[pd.Timestamp] = None
         self.open_ticket: Optional[int] = None
         self.open_risk_money: float = 0.0
+        self.digits: int = 2
 
         # Dashboard support: a rolling log tail and a coarse status flag so a
         # supervising UI can render what the loop is doing without scraping stdout.
@@ -215,6 +222,10 @@ class LiveTrader:
         )
         self.symbol_info = info
         self.stops_level_points = info.trade_stops_level
+        # Price precision varies by instrument: 2 for gold, 5 for a forex
+        # major, 3 for a JPY pair. Rounding everything to 2 silently zeroes
+        # forex ATR and spread in the dashboard.
+        self.digits = info.digits
         self.config = replace(self.config, broker=spec)
         print(f"  broker spec  : tick {spec.tick_size} / value {spec.tick_value} / "
               f"vol {spec.volume_min}-{spec.volume_max} step {spec.volume_step} / "
@@ -386,16 +397,24 @@ class LiveTrader:
                   f"({r_multiple:+.2f}R), balance {balance:,.2f}")
         record = {
             "exit_time": self._now(),
+            "symbol": self.symbol,
             "ticket": self.open_ticket,
             "direction": getattr(self, "open_direction", None),
             "zone_type": getattr(self, "open_zone_type", None),
             "confluence": getattr(self, "open_confluence", None),
+            "risk_percent": self.config.risk_percent_initial_balance,
             "pnl_money": round(profit, 2),
             "r_multiple": round(r_multiple, 3),
             "balance_after": round(balance, 2),
         }
         self.closed_trades.append(record)
         self.logger.log_trade(**record)
+        if self.portfolio is not None:
+            self.portfolio.register_close(self.symbol, r_multiple, balance)
+        # Persistent ledger: survives restarts and is the raw material for any
+        # future re-optimisation on live data (see adaptive.py).
+        if self.ledger is not None:
+            self.ledger.append(record)
         self.open_ticket = None
         self._check_alert_conditions()
         self.persist_state()
@@ -490,6 +509,14 @@ class LiveTrader:
         if not allowed:
             return reject(reason)
 
+        # Account-level gate: total open positions, correlated exposure and
+        # portfolio daily limits. Only present when several symbols share an
+        # account (see xauusd_robot/portfolio.py).
+        if self.portfolio is not None:
+            allowed, reason = self.portfolio.can_open(self.symbol)
+            if not allowed:
+                return reject(reason)
+
         # Broker minimum stop distance (SYMBOL_TRADE_STOPS_LEVEL).
         min_stop = self.stops_level_points * self.symbol_info.point
         if stop_distance < min_stop:
@@ -545,6 +572,8 @@ class LiveTrader:
         self.open_zone_type = setup.zone.type.value
         self.open_confluence = setup.confluence_score
         self.safety.register_trade_open()
+        if self.portfolio is not None:
+            self.portfolio.register_open(self.symbol)
         self.sm.on_trade_opened()
         self._log(f"ORDER PLACED #{result.order}: {summary}")
         self.logger.log_event(time=self.last_bar_time, event="order_placed", reason="ok",
@@ -572,6 +601,7 @@ class LiveTrader:
                 "status": self.status,
                 "mode": "LIVE" if self.live else "DRY_RUN",
                 "symbol": self.symbol,
+                "digits": self.digits,
                 "risk_percent": self.config.risk_percent_initial_balance,
                 "log": list(self.log_lines)[-120:],
                 "timestamp": self._now(),
@@ -599,8 +629,8 @@ class LiveTrader:
                 coverage = getattr(self, "tf_coverage", {}).get(tf, {})
                 lights.append({
                     "timeframe": tf,
-                    "close": None if pd.isna(close) else round(float(close), 2),
-                    "ema200": None if pd.isna(ema_value) else round(float(ema_value), 2),
+                    "close": None if pd.isna(close) else round(float(close), self.digits),
+                    "ema200": None if pd.isna(ema_value) else round(float(ema_value), self.digits),
                     "side": side,
                     "bars": coverage.get("bars"),
                     "ema_valid": coverage.get("ema_valid"),
@@ -611,7 +641,7 @@ class LiveTrader:
             atr = float(self.bars["atr"].iloc[i])
             snap["indicators"] = {
                 "wpr": round(wpr, 1),
-                "atr": round(atr, 2),
+                "atr": round(atr, self.digits + 1),
                 "wpr_state": (
                     "OVERSOLD" if wpr <= self.config.wpr_oversold
                     else "OVERBOUGHT" if wpr >= self.config.wpr_overbought
@@ -626,8 +656,8 @@ class LiveTrader:
                 setup_info.update({
                     "direction": s.direction,
                     "zone_type": s.zone.type.value,
-                    "zone_low": round(s.zone.low, 2),
-                    "zone_high": round(s.zone.high, 2),
+                    "zone_low": round(s.zone.low, self.digits),
+                    "zone_high": round(s.zone.high, self.digits),
                     "confluence": s.confluence_score,
                     "bars_left": max(0, s.expiry_bar - i),
                     "wpr_extreme_seen": s.wpr_extreme_seen,
@@ -640,7 +670,7 @@ class LiveTrader:
             snap["zones"] = [
                 {
                     "id": z.id, "type": z.type.value, "direction": z.direction,
-                    "low": round(z.low, 2), "high": round(z.high, 2),
+                    "low": round(z.low, self.digits), "high": round(z.high, self.digits),
                     "age": i - z.created_bar, "touched": z.touched,
                 }
                 for z in sorted(self.zone_engine.active_zones, key=lambda z: -z.created_bar)[:25]
@@ -692,7 +722,7 @@ class LiveTrader:
             if tick:
                 snap["price"] = {
                     "bid": tick.bid, "ask": tick.ask,
-                    "spread": round(tick.ask - tick.bid, 2),
+                    "spread": round(tick.ask - tick.bid, self.digits),
                 }
                 # Informational only: where live price sits against each EMA200.
                 # The regime rule deliberately ignores this in favour of closed
