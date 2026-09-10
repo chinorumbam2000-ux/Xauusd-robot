@@ -93,7 +93,7 @@
 
 <div class="grid">
   <div class="panel">
-    <h2>Six-timeframe EMA200 regime</h2>
+    <h2 id="regime-title">Multi-timeframe EMA200 regime</h2>
     <div class="row" style="margin-bottom:10px">
       <span class="big" id="regime">—</span>
       <span class="dim" id="regime-note"></span>
@@ -296,6 +296,10 @@ function render(s) {
   $('regime-note').textContent = s.regime === 'MIXED' ? 'no new trades while mixed' : 'all six aligned';
 
   const lights = s.regime_lights || [];
+  if (lights.length) {
+    $('regime-title').textContent = `${lights.length}-timeframe EMA200 regime (${lights.map(l => l.timeframe).join(', ')})`;
+    $('lights').style.gridTemplateColumns = `repeat(${lights.length}, 1fr)`;
+  }
   $('lights').innerHTML = lights.map(l => {
     const arrow = l.live_side === 'ABOVE' ? '▲' : l.live_side === 'BELOW' ? '▼' : '';
     const arrowCls = l.live_side === 'ABOVE' ? 'up' : 'down';

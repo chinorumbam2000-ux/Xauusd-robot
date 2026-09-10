@@ -13,8 +13,8 @@ before any meaningful capital is used.
 
 ## The strategy in one paragraph
 
-Direction is decided by a strict six-timeframe EMA200 regime filter (D1, H4, H1, M30, M15, M5 —
-all six closed bars must be on the same side of their EMA200, otherwise no trade). Execution is
+Direction is decided by a strict multi-timeframe EMA200 regime filter (H4, H1, M30, M15, M5 —
+all five closed bars must be on the same side of their EMA200, otherwise no trade). Execution is
 M5-only. The M5 zone engine tracks three *alternative* reaction zones — Order Block, Fair Value
 Gap, and pivot-based Support/Resistance. When price reacts out of one of them, a setup arms for
 exactly 5 bars, during which Williams %R(49) must exit an extreme and two consecutive push
@@ -31,7 +31,7 @@ limit, a 15% peak-equity lockout, a 3-bar cooldown and a 10× closed-balance kil
 | `config.py` | 13 | Every parameter, frozen at the v1.1 baseline values |
 | `indicators.py` | 3.1, 3.3 | EMA, Wilder ATR, Williams %R, body/range ratio |
 | `data.py` | 2, 9.1 | Loading, resampling, and no-look-ahead timeframe alignment |
-| `regime.py` | 3.1 | Six-timeframe EMA200 BUY / SELL / MIXED filter |
+| `regime.py` | 3.1 | Multi-timeframe EMA200 BUY / SELL / MIXED filter |
 | `structure.py` | 4.3 | Confirmed 2-left/2-right swing pivots |
 | `zones.py` | 4.1–4.4, 4.7 | OB / FVG / S&R detection, aging, invalidation, reaction, confluence |
 | `candles.py` | 3.4, 4.6 | Two consecutive push-candle rules |
@@ -152,28 +152,41 @@ Section 16 of the blueprint anticipates exactly this ("Over-defining confluence 
 the system of trades"). The funnel turns that risk into a measurement rather than an opinion,
 and points at which rule family to vary first during robustness testing.
 
-## First run on real data — and why it proves nothing yet
+## Results on real data — and why they prove less than they look like
 
 100,000 real M5 bars from a Deriv demo account (2025-04-11 → 2026-09-10, 517 days, median
-spread 15 points), $10,000 start, 1% risk:
+spread 15 points), $10,000 start, 1% risk. The D1 timeframe was removed from the regime filter
+by instruction, which is a deviation from Section 3.1 — so both variants are reported:
 
-| | |
-| --- | --- |
-| Trades | 15 (1.72/month) |
-| Win rate | 33.3% (break-even for 1:3 is 25%) |
-| Expectancy | +0.33R · profit factor 1.47 |
-| Net return | +4.44% · max drawdown 3.41% |
-| Worst streak | 3 consecutive losses |
+| | 5 timeframes (current) | 6 timeframes (blueprint) |
+| --- | --- | --- |
+| Trades | 52 (3.42/month) | 15 (1.72/month) |
+| Win rate | 40.4% | 33.3% |
+| Expectancy | +0.62R | +0.33R |
+| Profit factor | 2.00 | 1.47 |
+| Net return | +29.6% | +4.4% |
+| Max drawdown | 4.10% | 3.41% |
+| Worst streak | 4 | 3 |
 
-**Do not read this as an edge.** Three reasons:
+Break-even for a 1:3 payoff is 25% before costs, so both clear it. Walk-forward across five
+rolling windows on the 5-timeframe version: **4 of 5 profitable, worst window break-even**,
+35 trades total.
 
-1. **The sample is far too small.** Fifteen trades cannot distinguish a 33% win rate from a 25%
-   one; the standard error on win rate at n=15 is roughly ±12 points.
-2. **The profit is two trades.** Both confluence-score-2 setups won (+6R combined); the other
-   thirteen trades net **−1R**. Remove two trades and the result is a small loss.
-3. **There is no out-of-sample segment.** The D1 EMA200 consumes ~57,600 bars of warm-up, so of
-   100,000 bars only ~42,000 are tradeable at all. A chronological in-sample/validation/OOS split
-   (Section 9.2) is not yet possible — every segment would be shorter than the warm-up.
+**Reasons to stay sceptical anyway:**
+
+1. **Part of the gain is a longer test window, not better filtering.** Dropping D1 cuts warm-up
+   from ~57,600 M5 bars to ~14,400, so the tradeable window roughly doubles. Trades/month only
+   doubled (1.72 → 3.42) while total trades tripled — the rest is extra window.
+2. **Profit is still concentrated.** Six confluence-2 trades produced 18R of the 32R total. The
+   other 46 trades produced 14R between them.
+3. **Removing a rule because it backtests better on the data you hold is the exact overfitting
+   trap** Sections 10 and 16 warn about. The walk-forward consistency is the more meaningful
+   evidence; the headline return is not.
+4. **52 trades is still a small sample.** A 1:3 system needs a few hundred before win rate
+   separates skill from variance.
+
+Set `regime_timeframes=BLUEPRINT_REGIME_TIMEFRAMES` to restore the original six-timeframe filter
+and re-measure.
 
 The risk matrix does produce one actionable result. Because risk % does not change the signals,
 the trade sequence is identical across settings and only the scaling differs:
@@ -224,8 +237,15 @@ distance used for sizing is measured from the real fill price to the real stop l
 the configured risk budget the true worst-case loss. Where a bar contains both the stop and the
 target, the stop is assumed to fill first; a bar that gaps past a level fills at the open.
 
-**Warm-up.** A D1 EMA200 needs 200 daily bars — roughly 57,600 M5 bars. Anything shorter produces
-no tradeable regime at all. Use at least three years of M5 history.
+**Warm-up.** The slowest timeframe sets it. With D1 in the filter, a 200-period daily EMA needs
+~57,600 M5 bars before any regime exists; with H4 as the slowest, ~14,400. Anything shorter
+produces no tradeable regime at all.
+
+**The terminal must be running.** The MetaTrader5 Python API talks to a live terminal over IPC.
+Close MT5, sleep the machine or lose power and the robot stops seeing bars and stops trading.
+An already-open position is still protected, because SL/TP are registered server-side with the
+broker — you cannot miss a stop, but you will miss signals. 24/5 operation needs a VPS
+(Section 12).
 
 **Risk is fixed to the initial balance.** $50 on a $1,000 start stays $50 as the account grows,
 so the *effective* risk decays (5% → 2.5% at $2,000 → 0.5% at $10,000), exactly as Section 5.2

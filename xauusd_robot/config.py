@@ -40,7 +40,13 @@ class StrategyConfig:
     # --- Instrument / timeframe ---
     symbol: str = "XAUUSD"
     execution_tf: str = "M5"
-    regime_timeframes: Tuple[str, ...] = ("D1", "H4", "H1", "M30", "M15", "M5")
+    #: DEVIATION FROM BLUEPRINT v1.1 (Section 3.1 specifies six timeframes
+    #: including D1). D1 was removed by explicit instruction. Two consequences
+    #: worth tracking: the regime aligns more often, so the system trades more
+    #: and is less selective; and warm-up drops from ~57,600 M5 bars (200 daily
+    #: bars) to ~14,400 (200 H4 bars), which makes far more history testable.
+    #: Set BLUEPRINT_REGIME_TIMEFRAMES to restore the original filter.
+    regime_timeframes: Tuple[str, ...] = ("H4", "H1", "M30", "M15", "M5")
 
     # --- Indicators ---
     ema_period: int = 200
@@ -126,6 +132,11 @@ DERIV_XAUUSD = BrokerSpec(
     leverage=100.0,
     default_spread_points=15.0,  # observed median; real spread column overrides this
 )
+
+#: The original Section 3.1 filter, kept so the D1 removal can be measured
+#: rather than assumed:
+#:     replace(StrategyConfig(), regime_timeframes=BLUEPRINT_REGIME_TIMEFRAMES)
+BLUEPRINT_REGIME_TIMEFRAMES: Tuple[str, ...] = ("D1", "H4", "H1", "M30", "M15", "M5")
 
 #: Research matrix from Section 10 / 17.2 -- compare, never cherry-pick.
 RISK_TEST_MATRIX: Tuple[float, ...] = (0.5, 1.0, 2.0, 3.0, 5.0)
