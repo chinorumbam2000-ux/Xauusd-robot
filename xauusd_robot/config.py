@@ -96,7 +96,13 @@ class StrategyConfig:
     target_multiplier: float = 10.0
 
     # --- Experimental filters (OFF in baseline v1.1) ---
+    #: Section 10 lists these as later experiments, to be evaluated in
+    #: isolation. Turning one on is a deviation from the v1.1 baseline.
     use_session_filter: bool = False
+    allowed_sessions: Tuple[str, ...] = ("LONDON", "LONDON_NY_OVERLAP", "NEW_YORK")
+    #: A real news filter needs an economic-calendar feed, which the
+    #: MetaTrader5 Python API does not expose. Left unimplemented rather than
+    #: faked; see README. Section 16 warns not to assume it helps anyway.
     use_news_filter: bool = False
 
     broker: BrokerSpec = field(default_factory=BrokerSpec)

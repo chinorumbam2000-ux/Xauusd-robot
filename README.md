@@ -66,7 +66,14 @@ python -m xauusd_robot.cli spread-stress --data data/XAUUSD_M5_synthetic.csv
 
 # 6. In-sample / validation / out-of-sample, strictly chronological
 python -m xauusd_robot.cli split --data data/XAUUSD_M5_synthetic.csv --risk 1.0
+
+# 7. Rolling walk-forward windows
+python -m xauusd_robot.cli walk-forward --data data/XAUUSD_M5_synthetic.csv --train-bars 60000 --test-bars 12000
 ```
+
+Walk-forward scores each test window using a run that also covers its training history, then
+counts only trades that *enter* inside the test window. Scoring a bare test slice would score
+noise, because a D1 EMA200 needs ~57,600 M5 bars before it means anything.
 
 Bring your own data by exporting M5 bars to CSV with `time, open, high, low, close`
 (plus optional `volume` and `spread` in points). Column names are matched case-insensitively.
@@ -195,6 +202,22 @@ still-forming H4 candle can never influence a decision. Similarly, a 2-left/2-ri
 becomes visible two bars after the pivot itself, and a zone is never eligible on the same bar
 that confirmed it.
 
+**Live uses the broker's own higher-timeframe bars, not resampled M5.** Resampling is wrong
+twice over. The daily bar lands on UTC midnight rather than the broker's trading day, and a
+200-period EMA seeded from a short resampled series stays contaminated by its seed for roughly
+3x its span. Measured against this Deriv feed, resampling produced a D1 EMA200 of **4,390.69
+from just 67 valid values**, against the broker's true **4,358.42** — a 31-point error, easily
+enough to flip a regime verdict. The live path now pulls each timeframe natively and requests
+enough history for the EMA to converge (`3 x ema_period` beyond the analysis window). Offline
+CSV backtests still resample, since a single M5 file is all they have; prefer per-timeframe
+exports when precision matters.
+
+**Closed-bar verdicts differ from live price, by design.** Section 3.1 compares each timeframe's
+*last closed* bar to its EMA200, so a daily candle that closed above the EMA keeps the D1 light
+green all day even while price trades below it. This looks like a bug and is not one, so the
+dashboard shows both the closed-bar verdict and a live-price arrow, and explicitly flags the
+timeframes where they disagree.
+
 **Execution model.** Input prices are treated as bid. A BUY fills at ask and exits at bid; a SELL
 fills at bid and exits at ask, so the spread is charged exactly once per round trip. The stop
 distance used for sizing is measured from the real fill price to the real stop level, which makes
@@ -229,6 +252,40 @@ regimes + intraday mean reversion + Beta-distributed candle bodies) purely so th
 runnable and testable end to end. **It is not market data and results from it are not evidence.**
 Section 9.1 requires real XAUUSD history with realistic spread modelling, covering trending,
 ranging, high- and low-volatility and crisis periods.
+
+## Blueprint coverage
+
+Implemented, by section:
+
+| Section | Item | Status |
+| --- | --- | --- |
+| 3.1–3.5 | Regime filter, zones, WPR, push candles, entry sequence | done |
+| 4.1–4.7 | FVG / OB / S&R definitions, reaction, WPR timing, confluence | done |
+| 5.1–5.5 | Risk matrix, fixed-initial-balance model, dynamic sizing, structural SL, 3R, all circuit breakers | done |
+| 6.1 | Module split (MarketData … Logger) | done, as Python modules |
+| 6.2 | Pandas/NumPy analysis, Matplotlib diagnostics | done |
+| 7 | State machine | done |
+| 9.1–9.4 | Data handling, chronological segmentation, mandatory metrics, 1:3 maths | done |
+| 10 | Parameter sweeps, spread cap, plateau-not-peak selection | done |
+| 11.1 | Same code path for demo/forward test, restart recovery, rejection logging | done |
+| 12 | VPS deployment, state persistence, daily log rotation, alerts, dashboard | dashboard/alerts/rotation done; VPS is yours to host |
+| 13 | Every configuration parameter | done |
+| 14 | Log every setup, not only trades; full rule snapshot | done |
+| 15 | Acceptance tests | 77 automated tests |
+| 17 | Implementation priorities and definition of done | done |
+
+Deliberately **not** implemented:
+
+- **News filter** (Section 13, `UseNewsFilter`). A real one needs an economic-calendar feed, which
+  the MetaTrader5 Python API does not expose. The flag exists; the behaviour does not. Faking it
+  would be worse than omitting it, and Section 16 warns against assuming it helps at all.
+- **Break-even and trailing stops** (Section 5.4). The blueprint explicitly excludes them from the
+  v1.1 baseline and defers them to later variants.
+- **Session filter** is implemented but **off by default** (Section 10 lists it as a later
+  experiment). Enable via `use_session_filter`; `allowed_sessions` defaults to London/overlap/NY.
+- **MQL5 EA** (Phases 2–3). The blueprint recommends MQL5 for live execution; this Python layer is
+  the research counterpart and the reference the EA should be validated against. The live bridge
+  here covers Phase 6 demo forward testing directly.
 
 ## Status against the blueprint roadmap
 

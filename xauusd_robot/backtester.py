@@ -306,6 +306,10 @@ class Backtester:
             self._reject(i, setup, "invalid_stop_distance", snapshot)
             return
 
+        if cfg.use_session_filter and _session_of(self.index[i]) not in cfg.allowed_sessions:
+            self._reject(i, setup, "session_filter", snapshot)
+            return
+
         allowed, reason = self.safety.can_open_new_trade(i, spread, stop_distance, atr_value)
         if not allowed:
             self._reject(i, setup, reason, snapshot)

@@ -99,6 +99,13 @@
       <span class="dim" id="regime-note"></span>
     </div>
     <div class="lights" id="lights"></div>
+    <div class="dim" style="font-size:11.5px; margin-top:10px; line-height:1.45">
+      Dots use each timeframe's <b>last CLOSED bar</b> (Section 3.1) — an unfinished
+      higher-timeframe candle must not flip the filter intrabar. The small arrow shows where
+      <b>live price</b> sits versus the same EMA200, which can legitimately differ: a daily
+      candle that closed above its EMA200 stays "above" all day even if price trades below it.
+    </div>
+    <div id="live-vs-closed" class="dim" style="font-size:11.5px; margin-top:6px"></div>
   </div>
 
   <div class="panel">
@@ -167,6 +174,39 @@
       </div>
       <table><tbody id="foreign-rows"></tbody></table>
     </div>
+  </div>
+</div>
+
+<div class="grid" style="margin-top:12px">
+  <div class="panel">
+    <h2>Forward-test performance</h2>
+    <div id="perf-empty" class="dim">No closed trades yet. Metrics appear once the robot has traded.</div>
+    <div id="perf-body" style="display:none">
+      <div class="kv"><span>Trades</span><span id="pf-trades">—</span></div>
+      <div class="kv"><span>Win rate (break-even 25%)</span><span id="pf-wr">—</span></div>
+      <div class="kv"><span>Expectancy</span><span id="pf-exp">—</span></div>
+      <div class="kv"><span>Profit factor</span><span id="pf-pf">—</span></div>
+      <div class="kv"><span>Total R</span><span id="pf-r">—</span></div>
+      <div class="kv"><span>Worst losing streak</span><span id="pf-streak">—</span></div>
+      <div class="kv"><span>Net P/L</span><span id="pf-net">—</span></div>
+      <div id="pf-zones" style="margin-top:8px"></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Equity &amp; drawdown</h2>
+    <svg id="eqchart" viewBox="0 0 500 150" preserveAspectRatio="none"
+         style="width:100%; height:150px; background:#0b0d11; border:1px solid var(--line); border-radius:8px"></svg>
+    <div class="dim" style="font-size:11.5px; margin-top:6px" id="eq-note">
+      Sampled once per closed M5 bar while the robot runs.
+    </div>
+  </div>
+
+  <div class="panel">
+    <h2>Alerts</h2>
+    <div id="alerts-empty" class="dim">No alerts. Order rejections, drawdown lockout,
+      daily lockout and the 10x target all raise one here.</div>
+    <div id="alerts" style="max-height:220px; overflow-y:auto"></div>
   </div>
 </div>
 
@@ -255,11 +295,25 @@ function render(s) {
   $('regime').className = 'big ' + (s.regime === 'BUY' ? 'up' : s.regime === 'SELL' ? 'down' : 'dim');
   $('regime-note').textContent = s.regime === 'MIXED' ? 'no new trades while mixed' : 'all six aligned';
 
-  $('lights').innerHTML = (s.regime_lights || []).map(l => `
-    <div class="light ${l.side === 'ABOVE' ? 'above' : l.side === 'BELOW' ? 'below' : ''}">
+  const lights = s.regime_lights || [];
+  $('lights').innerHTML = lights.map(l => {
+    const arrow = l.live_side === 'ABOVE' ? '▲' : l.live_side === 'BELOW' ? '▼' : '';
+    const arrowCls = l.live_side === 'ABOVE' ? 'up' : 'down';
+    const disagree = l.live_side && l.side !== 'UNKNOWN' && l.live_side !== l.side;
+    return `
+    <div class="light ${l.side === 'ABOVE' ? 'above' : l.side === 'BELOW' ? 'below' : ''}"
+         title="closed bar ${fmt(l.close)} vs EMA200 ${fmt(l.ema200)} (${l.bars || '?'} bars, ${l.ema_valid || '?'} valid)">
       <div class="tf">${l.timeframe}</div><div class="dot"></div>
       <div class="px">${l.ema200 === null ? 'warm-up' : fmt(l.ema200)}</div>
-    </div>`).join('');
+      <div class="px ${arrowCls}" style="${disagree ? 'font-weight:700' : ''}">${arrow} live</div>
+    </div>`;
+  }).join('');
+
+  const conflicts = lights.filter(l => l.live_side && l.side !== 'UNKNOWN' && l.live_side !== l.side);
+  $('live-vs-closed').innerHTML = conflicts.length
+    ? `<span class="warn">Live price disagrees with the closed-bar verdict on ${conflicts.map(c => c.timeframe).join(', ')}.</span>
+       This is expected behaviour, not an error — the filter waits for those bars to close.`
+    : 'Live price agrees with every closed-bar verdict.';
 
   if (s.indicators) {
     $('atr').textContent = fmt(s.indicators.atr);
@@ -324,12 +378,83 @@ function render(s) {
         <td>${z.touched ? 'yes' : '—'}</td></tr>`).join('')
     || '<tr><td colspan="6" class="dim">No active zones.</td></tr>';
 
+  const perf = s.performance || {};
+  const hasPerf = perf.trades > 0;
+  $('perf-empty').style.display = hasPerf ? 'none' : 'block';
+  $('perf-body').style.display = hasPerf ? 'block' : 'none';
+  if (hasPerf) {
+    $('pf-trades').textContent = perf.trades;
+    const beat = perf.win_rate > perf.break_even_win_rate;
+    $('pf-wr').innerHTML = `<span class="${beat ? 'up' : 'down'}">${fmt(perf.win_rate)}%</span>`;
+    $('pf-exp').innerHTML = `<span class="${perf.expectancy_r >= 0 ? 'up' : 'down'}">${fmt(perf.expectancy_r, 3)}R</span>`;
+    $('pf-pf').textContent = perf.profit_factor === null ? '—' : fmt(perf.profit_factor, 2);
+    $('pf-r').innerHTML = `<span class="${perf.total_r >= 0 ? 'up' : 'down'}">${fmt(perf.total_r, 2)}R</span>`;
+    $('pf-streak').textContent = perf.max_consecutive_losses;
+    $('pf-net').innerHTML = `<span class="${perf.net_money >= 0 ? 'up' : 'down'}">${fmt(perf.net_money)}</span>`;
+    const zones = perf.by_zone_type || {};
+    $('pf-zones').innerHTML = Object.keys(zones).length
+      ? '<table><thead><tr><th>Zone</th><th>Trades</th><th>Total R</th></tr></thead><tbody>' +
+        Object.entries(zones).map(([k, v]) =>
+          `<tr><td>${k}</td><td>${v.trades}</td>
+           <td class="${v.total_r >= 0 ? 'up' : 'down'}">${fmt(v.total_r, 2)}</td></tr>`).join('') +
+        '</tbody></table>'
+      : '';
+    if (perf.trades < 30) {
+      $('pf-zones').innerHTML += `<div class="dim" style="font-size:11.5px; margin-top:8px">
+        ${perf.trades} trades is too few to judge an edge. A 1:3 system needs a few hundred
+        before win rate means anything.</div>`;
+    }
+  }
+
+  drawEquity(s.equity_curve || []);
+
+  const alerts = s.alerts || [];
+  $('alerts-empty').style.display = alerts.length ? 'none' : 'block';
+  $('alerts').innerHTML = alerts.slice().reverse().map(a => `
+    <div style="padding:7px 0; border-bottom:1px solid var(--line)">
+      <div><span class="warn" style="font-weight:600">${a.kind}</span>
+           <span class="dim" style="font-size:11px"> ${a.time}</span></div>
+      <div style="font-size:12px">${a.message}</div>
+    </div>`).join('');
+
   const log = $('log');
   pinned = log.scrollTop + log.clientHeight >= log.scrollHeight - 30;
   log.textContent = (s.log || []).join('\n');
   if (pinned) log.scrollTop = log.scrollHeight;
 
   if (s.mt5_error) showBanner('MT5: ' + s.mt5_error);
+}
+
+function drawEquity(points) {
+  const svg = $('eqchart');
+  if (points.length < 2) {
+    svg.innerHTML = `<text x="250" y="78" fill="#8b93a3" font-size="11" text-anchor="middle">
+      collecting data — one point per closed M5 bar</text>`;
+    $('eq-note').textContent = `${points.length} point${points.length === 1 ? '' : 's'} so far.`;
+    return;
+  }
+  const W = 500, H = 150, pad = 6;
+  const eq = points.map(p => p.equity);
+  const lo = Math.min(...eq), hi = Math.max(...eq);
+  const span = (hi - lo) || 1;
+  const x = i => pad + (i / (points.length - 1)) * (W - 2 * pad);
+  const y = v => H - pad - ((v - lo) / span) * (H - 2 * pad);
+
+  // Drawdown from running peak, shaded beneath the equity line.
+  let peak = -Infinity;
+  const dd = eq.map(v => { peak = Math.max(peak, v); return (peak - v) / peak; });
+  const maxDd = Math.max(...dd);
+
+  const line = eq.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  const area = `${line} L${x(eq.length - 1).toFixed(1)},${H - pad} L${x(0).toFixed(1)},${H - pad} Z`;
+  const rising = eq[eq.length - 1] >= eq[0];
+  const col = rising ? '#29c07a' : '#e5484d';
+
+  svg.innerHTML = `
+    <path d="${area}" fill="${col}" opacity="0.12"/>
+    <path d="${line}" fill="none" stroke="${col}" stroke-width="1.6"/>`;
+  $('eq-note').textContent =
+    `${points.length} bars · range ${lo.toFixed(2)}–${hi.toFixed(2)} · max drawdown ${(maxDd * 100).toFixed(2)}% (15% locks)`;
 }
 
 async function refresh() {

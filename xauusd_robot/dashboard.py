@@ -150,12 +150,29 @@ class Handler(BaseHTTPRequestHandler):
         self._json({"ok": not error, "error": error})
 
 
+def _port_in_use(host: str, port: int) -> bool:
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.5)
+        return probe.connect_ex((host, port)) == 0
+
+
 def serve(trader: LiveTrader, host: str = "127.0.0.1", port: int = 8765, autostart: bool = True) -> None:
+    # HTTPServer sets allow_reuse_address, which on Windows lets a second
+    # instance bind a port another process is already serving. The result is
+    # two robots against one account and a UI showing whichever answers
+    # first, so refuse up front instead.
+    if _port_in_use(host, port):
+        raise LiveTraderError(
+            f"port {port} is already serving -- another dashboard is running.\n"
+            f"  Stop it first, or pass --port with a free port."
+        )
+
     supervisor = Supervisor(trader)
     if autostart:
         supervisor.start()
 
-    handler = partial(Handler)
     Handler.supervisor = supervisor
     server = ThreadingHTTPServer((host, port), Handler)
 

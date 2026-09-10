@@ -156,6 +156,58 @@ def cmd_split(args) -> None:
         _print_metrics(result.metrics, f"{name} (risk={args.risk}%)")
 
 
+def cmd_walk_forward(args) -> None:
+    """Section 9.2: repeat development/validation across rolling chronological windows."""
+    from .validation import run_backtest, walk_forward_windows
+
+    m5 = load_m5_csv(args.data)
+    config = _config(args.risk, args.broker)
+    windows = walk_forward_windows(m5, args.train_bars, args.test_bars)
+    if not windows:
+        print(f"\nNot enough data for walk-forward: {len(m5):,} bars, need at least "
+              f"{args.train_bars + args.test_bars:,}.")
+        print("Remember the D1 EMA200 alone consumes ~57,600 bars of warm-up.")
+        return
+
+    from .metrics import compute_metrics
+
+    rows = []
+    for n, window in enumerate(windows, 1):
+        # The test window must inherit indicator warm-up from its training
+        # history -- a D1 EMA200 needs ~57,600 M5 bars before it means
+        # anything, so scoring a bare test slice would score noise. Run over
+        # train+test, then count only trades that ENTER inside the test window.
+        combined = pd.concat([window["train"], window["test"]])
+        test_start = window["test"].index[0]
+        result = run_backtest(combined, config, args.balance)
+
+        trades = result.trades
+        if not trades.empty:
+            trades = trades[trades["entry_time"] >= test_start].copy()
+        m = compute_metrics(trades, result.equity.iloc[len(window["train"]):],
+                            args.balance, config)
+        rows.append({
+            "window": n,
+            "test_start": test_start.date(),
+            "test_end": window["test"].index[-1].date(),
+            "trades": m["trades"],
+            "win_rate": m["win_rate"],
+            "expectancy_r": m["expectancy_r"],
+            "total_r": m["total_r"],
+            "max_drawdown_percent": m["max_drawdown_percent"],
+        })
+
+    table = pd.DataFrame(rows)
+    print(f"\n=== Walk-forward: {len(windows)} windows "
+          f"({args.train_bars:,} train / {args.test_bars:,} test bars) ===")
+    print(table.to_string(index=False, float_format=lambda v: f"{v:,.3f}"))
+    profitable = int((table["total_r"] > 0).sum())
+    print(f"\nprofitable windows : {profitable}/{len(table)}")
+    print(f"total trades       : {int(table['trades'].sum())}")
+    print("Consistency across windows matters more than the sum; a single dominant "
+          "window is not persistence.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="xauusd_robot", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -186,6 +238,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("split", parents=[common])
     p.add_argument("--risk", type=float, default=1.0)
     p.set_defaults(func=cmd_split)
+
+    p = sub.add_parser("walk-forward", parents=[common])
+    p.add_argument("--risk", type=float, default=1.0)
+    p.add_argument("--train-bars", type=int, default=80000)
+    p.add_argument("--test-bars", type=int, default=20000)
+    p.set_defaults(func=cmd_walk_forward)
 
     return parser
 

@@ -33,8 +33,8 @@ from typing import Callable, Optional
 import pandas as pd
 
 from .config import BrokerSpec, StrategyConfig
-from .data import build_regime_frame, build_timeframe_indicators
-from .indicators import add_core_indicators
+from .data import TF_FREQ, align_to_m5_close
+from .indicators import add_core_indicators, ema
 from .logging_engine import RunLogger
 from .regime import Regime, compute_regime
 from .risk import compute_lot_size, compute_stop_loss
@@ -81,6 +81,10 @@ class LiveTrader:
         # Dashboard support: a rolling log tail and a coarse status flag so a
         # supervising UI can render what the loop is doing without scraping stdout.
         self.log_lines: deque = deque(maxlen=400)
+        self.alerts: deque = deque(maxlen=50)
+        self._alerted: set = set()
+        self.closed_trades: list = []  # live forward-test ledger, Section 14
+        self.equity_curve: list = []
         self.status: str = "idle"
         self.account = None
         self.symbol_info = None
@@ -90,6 +94,48 @@ class LiveTrader:
         line = f"[{self._now()}] {message}"
         print(line, flush=True)
         self.log_lines.append(line)
+        self._write_daily_log(line)
+
+    def _write_daily_log(self, line: str) -> None:
+        """Section 12: daily log rotation, retaining all trade/signal logs."""
+        try:
+            os.makedirs(self.log_dir, exist_ok=True)
+            stamp = datetime.now().strftime("%Y-%m-%d")
+            with open(os.path.join(self.log_dir, f"session_{stamp}.log"), "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+        except OSError:
+            pass  # logging must never take the trading loop down
+
+    def alert(self, kind: str, message: str) -> None:
+        """Section 12: alerts for order rejection, drawdown, daily lockout, target."""
+        entry = {"time": self._now(), "kind": kind, "message": message}
+        self.alerts.append(entry)
+        self._log(f"ALERT [{kind}] {message}")
+
+    def _check_alert_conditions(self) -> None:
+        """Raise an alert the first time each lock condition trips."""
+        state = self.safety.state
+        if state.drawdown_locked and "drawdown" not in self._alerted:
+            self._alerted.add("drawdown")
+            self.alert("drawdown_lock",
+                       f"equity fell {self.config.max_peak_equity_drawdown:.0%} below peak "
+                       f"{state.running_equity_peak:,.2f}; new entries disabled pending manual review")
+        if state.target_reached and "target" not in self._alerted:
+            self._alerted.add("target")
+            self.alert("target_reached",
+                       f"closed balance {state.closed_balance:,.2f} reached "
+                       f"{self.config.target_multiplier:g}x the initial balance; entries blocked")
+        daily_key = f"daily_{state.broker_day}"
+        locked_out = (
+            state.trades_today >= self.config.max_trades_per_day
+            or state.losses_today >= self.config.max_losses_per_day
+            or state.daily_realized_r <= self.config.daily_loss_limit_r
+        )
+        if locked_out and daily_key not in self._alerted:
+            self._alerted.add(daily_key)
+            self.alert("daily_lockout",
+                       f"daily limit reached ({state.trades_today} trades, {state.losses_today} losses, "
+                       f"{state.daily_realized_r:+.2f}R); no new entries until the next broker day")
 
     @staticmethod
     def _import_mt5():
@@ -189,11 +235,60 @@ class LiveTrader:
         """The newest bar from MT5 is still forming -- decisions use closed bars only."""
         return frame.iloc[:-1]
 
+    #: Bars per calendar day, used to size native history requests.
+    BARS_PER_DAY = {"D1": 1, "H4": 6, "H1": 24, "M30": 48, "M15": 96, "M5": 288}
+
+    def _mt5_timeframe(self, name: str):
+        return {
+            "D1": self.mt5.TIMEFRAME_D1, "H4": self.mt5.TIMEFRAME_H4,
+            "H1": self.mt5.TIMEFRAME_H1, "M30": self.mt5.TIMEFRAME_M30,
+            "M15": self.mt5.TIMEFRAME_M15, "M5": self.mt5.TIMEFRAME_M5,
+        }[name]
+
+    def _fetch_native_timeframe(self, name: str, count: int) -> pd.DataFrame:
+        """Fetch a timeframe's own bars from the broker.
+
+        Resampling M5 into higher timeframes is wrong twice over: the daily
+        boundary lands on UTC midnight instead of the broker's trading day,
+        and a 200-period EMA seeded from a short resampled series stays
+        contaminated by its seed for roughly 3x its span. Both are avoided by
+        using the broker's own bars, which are also what the trader sees on
+        their charts.
+        """
+        rates = self.mt5.copy_rates_from_pos(self.symbol, self._mt5_timeframe(name), 0, count)
+        if rates is None or len(rates) == 0:
+            raise LiveTraderError(f"no {name} bars: {self.mt5.last_error()}")
+        frame = pd.DataFrame(rates)
+        frame["time"] = pd.to_datetime(frame["time"], unit="s")
+        frame = frame.set_index("time")[["open", "high", "low", "close"]]
+        frame.index.name = "open_time"
+        frame["close_time"] = frame.index + pd.tseries.frequencies.to_offset(TF_FREQ[name])
+        frame["ema"] = ema(frame["close"], self.config.ema_period)
+        return frame
+
     def _enrich(self, raw: pd.DataFrame) -> pd.DataFrame:
+        """Attach indicators and build the regime frame from NATIVE broker bars."""
         cfg = self.config
         bars = add_core_indicators(raw, cfg.ema_period, cfg.atr_period, cfg.wpr_period)
-        tf_frames = build_timeframe_indicators(raw, cfg)
-        self.regime_frame = build_regime_frame(bars, tf_frames, cfg)
+
+        window_days = max(1.0, len(raw) / 288.0)
+        m5_close_time = raw.index.to_series() + pd.tseries.frequencies.to_offset(TF_FREQ["M5"])
+
+        pieces, coverage = [], {}
+        for tf in cfg.regime_timeframes:
+            # Cover the whole M5 window plus enough extra for the EMA to converge
+            # (3x span is the usual rule of thumb for an EMA seeded cold).
+            needed = int(window_days * self.BARS_PER_DAY[tf]) + 3 * cfg.ema_period
+            native = self._fetch_native_timeframe(tf, min(needed, 90000))
+            coverage[tf] = {
+                "bars": len(native),
+                "ema_valid": int(native["ema"].notna().sum()),
+                "earliest": native.index[0],
+            }
+            pieces.append(align_to_m5_close(m5_close_time, native, prefix=tf, columns=("close", "ema")))
+
+        self.tf_coverage = coverage
+        self.regime_frame = pd.concat(pieces, axis=1)
         self.regime_series = compute_regime(self.regime_frame, cfg.regime_timeframes)
         return bars
 
@@ -289,11 +384,20 @@ class LiveTrader:
         self.sm.on_trade_closed()
         self._log(f"position #{self.open_ticket} closed: {profit:+,.2f} "
                   f"({r_multiple:+.2f}R), balance {balance:,.2f}")
-        self.logger.log_trade(
-            exit_time=pd.Timestamp.utcnow(), ticket=self.open_ticket,
-            pnl_money=profit, r_multiple=r_multiple, balance_after=balance,
-        )
+        record = {
+            "exit_time": self._now(),
+            "ticket": self.open_ticket,
+            "direction": getattr(self, "open_direction", None),
+            "zone_type": getattr(self, "open_zone_type", None),
+            "confluence": getattr(self, "open_confluence", None),
+            "pnl_money": round(profit, 2),
+            "r_multiple": round(r_multiple, 3),
+            "balance_after": round(balance, 2),
+        }
+        self.closed_trades.append(record)
+        self.logger.log_trade(**record)
         self.open_ticket = None
+        self._check_alert_conditions()
         self.persist_state()
 
     # ------------------------------------------------------------------
@@ -315,6 +419,14 @@ class LiveTrader:
 
         account = self.mt5.account_info()
         self.safety.update_equity(account.equity)
+        self.equity_curve.append({
+            "time": str(self.last_bar_time),
+            "equity": round(account.equity, 2),
+            "balance": round(account.balance, 2),
+        })
+        if len(self.equity_curve) > 3000:
+            del self.equity_curve[:-3000]
+        self._check_alert_conditions()
 
         events = self.zone_engine.process_bar(i)
         regime = self._regime_at(i)
@@ -366,7 +478,7 @@ class LiveTrader:
             target_price = entry - cfg.reward_risk * stop_distance
 
         def reject(reason: str) -> None:
-            self._log(f"entry REJECTED ({reason})")
+            self.alert("entry_rejected", f"{setup.direction} setup rejected: {reason}")
             self.logger.log_event(time=self.last_bar_time, event="entry_rejected", reason=reason,
                                   direction=setup.direction, entry=entry, stop=stop_price)
             self.sm.cancel()
@@ -421,7 +533,7 @@ class LiveTrader:
         if result is None or result.retcode != self.mt5.TRADE_RETCODE_DONE:
             code = "none" if result is None else result.retcode
             comment = "" if result is None else result.comment
-            self._log(f"ORDER FAILED (retcode {code} {comment}): {summary}")
+            self.alert("order_failed", f"retcode {code} {comment} -- {summary}")
             self.logger.log_event(time=self.last_bar_time, event="order_failed",
                                   reason=str(code), comment=comment, **request)
             self.sm.cancel()
@@ -429,6 +541,9 @@ class LiveTrader:
 
         self.open_ticket = result.order
         self.open_risk_money = lot.normalized_risk
+        self.open_direction = setup.direction
+        self.open_zone_type = setup.zone.type.value
+        self.open_confluence = setup.confluence_score
         self.safety.register_trade_open()
         self.sm.on_trade_opened()
         self._log(f"ORDER PLACED #{result.order}: {summary}")
@@ -469,20 +584,26 @@ class LiveTrader:
             snap["last_bar"] = str(self.last_bar_time)
             snap["regime"] = regime.value
 
-            # Six EMA200 regime lights.
+            # Six EMA200 regime lights. Section 3.1 compares the most recently
+            # CLOSED bar of each timeframe -- not live price -- so the closed
+            # bar's own timestamp is reported alongside, otherwise a D1 verdict
+            # can look wrong against an intraday move it deliberately ignores.
             lights = []
             for tf in self.config.regime_timeframes:
                 close = self.regime_frame[f"{tf}_close"].iloc[i]
-                ema = self.regime_frame[f"{tf}_ema"].iloc[i]
-                if pd.isna(close) or pd.isna(ema):
+                ema_value = self.regime_frame[f"{tf}_ema"].iloc[i]
+                if pd.isna(close) or pd.isna(ema_value):
                     side = "UNKNOWN"
                 else:
-                    side = "ABOVE" if close > ema else ("BELOW" if close < ema else "ON")
+                    side = "ABOVE" if close > ema_value else ("BELOW" if close < ema_value else "ON")
+                coverage = getattr(self, "tf_coverage", {}).get(tf, {})
                 lights.append({
                     "timeframe": tf,
                     "close": None if pd.isna(close) else round(float(close), 2),
-                    "ema200": None if pd.isna(ema) else round(float(ema), 2),
+                    "ema200": None if pd.isna(ema_value) else round(float(ema_value), 2),
                     "side": side,
+                    "bars": coverage.get("bars"),
+                    "ema_valid": coverage.get("ema_valid"),
                 })
             snap["regime_lights"] = lights
 
@@ -544,6 +665,16 @@ class LiveTrader:
                 "max_losses_per_day": self.config.max_losses_per_day,
             }
 
+            snap["alerts"] = list(self.alerts)[-8:]
+            snap["equity_curve"] = self.equity_curve[-400:]
+            snap["trades"] = self.closed_trades[-25:]
+            snap["performance"] = self._performance()
+            snap["filters"] = {
+                "session_filter": self.config.use_session_filter,
+                "allowed_sessions": list(self.config.allowed_sessions),
+                "news_filter": self.config.use_news_filter,
+            }
+
         # MT5 calls outside the lock -- they can block on the terminal.
         try:
             account = self.mt5.account_info()
@@ -563,6 +694,12 @@ class LiveTrader:
                     "bid": tick.bid, "ask": tick.ask,
                     "spread": round(tick.ask - tick.bid, 2),
                 }
+                # Informational only: where live price sits against each EMA200.
+                # The regime rule deliberately ignores this in favour of closed
+                # bars, and showing both makes that difference legible.
+                for light in snap.get("regime_lights", []):
+                    if light["ema200"] is not None:
+                        light["live_side"] = "ABOVE" if tick.bid > light["ema200"] else "BELOW"
             all_positions = self.mt5.positions_get() or []
             positions = [
                 p for p in all_positions if p.magic == MAGIC and p.symbol == self.symbol
@@ -593,6 +730,44 @@ class LiveTrader:
         except Exception as exc:
             snap["mt5_error"] = f"{type(exc).__name__}: {exc}"
         return snap
+
+    def _performance(self) -> dict:
+        """Section 9.3 metrics over the live forward test so far."""
+        trades = self.closed_trades
+        if not trades:
+            return {"trades": 0, "note": "no closed trades yet"}
+
+        r_values = [t["r_multiple"] for t in trades]
+        wins = [r for r in r_values if r > 0]
+        losses = [r for r in r_values if r <= 0]
+        gross_profit = sum(t["pnl_money"] for t in trades if t["pnl_money"] > 0)
+        gross_loss = -sum(t["pnl_money"] for t in trades if t["pnl_money"] <= 0)
+
+        streak = worst = 0
+        for r in r_values:
+            streak = streak + 1 if r < 0 else 0
+            worst = max(worst, streak)
+
+        by_zone: dict = {}
+        for t in trades:
+            key = t.get("zone_type") or "unknown"
+            entry = by_zone.setdefault(key, {"trades": 0, "total_r": 0.0})
+            entry["trades"] += 1
+            entry["total_r"] = round(entry["total_r"] + t["r_multiple"], 3)
+
+        return {
+            "trades": len(trades),
+            "win_rate": round(len(wins) / len(trades) * 100, 2),
+            "break_even_win_rate": round(100 / (1 + self.config.reward_risk), 2),
+            "expectancy_r": round(sum(r_values) / len(r_values), 3),
+            "total_r": round(sum(r_values), 3),
+            "profit_factor": round(gross_profit / gross_loss, 3) if gross_loss else None,
+            "average_win_r": round(sum(wins) / len(wins), 3) if wins else 0.0,
+            "average_loss_r": round(sum(losses) / len(losses), 3) if losses else 0.0,
+            "max_consecutive_losses": worst,
+            "net_money": round(sum(t["pnl_money"] for t in trades), 2),
+            "by_zone_type": by_zone,
+        }
 
     # ------------------------------------------------------------------
     def set_live(self, live: bool) -> str:
