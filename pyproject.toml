@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xauusd-robot"
+version = "1.1.0"
+description = "Deterministic rule-based XAUUSD trading system and research layer (Strategy Specification v1.1)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["pandas>=2.0", "numpy>=1.24"]
+
+[project.optional-dependencies]
+research = ["matplotlib>=3.7"]
+dev = ["pytest>=7.0", "matplotlib>=3.7"]
+
+[project.scripts]
+xauusd-robot = "xauusd_robot.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["xauusd_robot*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
