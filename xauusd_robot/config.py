@@ -55,12 +55,22 @@ class StrategyConfig:
     #: byte-identical results, because it sits between M30 and M5 in the trend
     #: hierarchy and effectively never disagrees with both.
     #:
-    #: M5 is NOT redundant, and was kept for that reason. Dropping it takes the
-    #: win rate from 44.0% to 21.4% -- below the 25% break-even a 1:3 payoff
-    #: needs -- turns expectancy negative at -0.143R, and drives drawdown to
-    #: 15.41%, which trips the peak-equity lockout. Requiring the execution
-    #: timeframe to agree with its own EMA200 is what stops the robot buying
-    #: into a falling M5 trend.
+    #: M5 is kept, but the reason is drawdown rather than signal quality. An
+    #: earlier note here claimed dropping it produced a 21.4% win rate and
+    #: negative expectancy; that came from a 2% risk run truncated by the
+    #: lockout after 14 trades and was wrong. Measured at 0.5% risk, where
+    #: neither variant locks out, H4/H1/M30 alone gives 142 trades at 36.6% and
+    #: +0.460R against 74 trades at 44.6% and +0.773R -- nearly double the
+    #: frequency, still clearly profitable, and neither gap is statistically
+    #: significant.
+    #:
+    #: What decides it is that drawdown per unit of risk is about twice as high
+    #: without M5, so it can only carry a third of the risk percent. Held to a
+    #: 12% drawdown budget: 165.1% return at 3% risk with M5, against 65.4% at
+    #: 1% risk without it. The M5-less variant does show better walk-forward
+    #: consistency (5/5 windows, +3.0R worst) and remains a legitimate choice
+    #: for anyone preferring frequency over return per unit of risk -- but it
+    #: needs risk dropped to ~1%, since 2% would reach ~19% drawdown and lock.
     #:
     #: Warm-up is ~14,400 M5 bars, set by H4 as the slowest member.
     #: Set BLUEPRINT_REGIME_TIMEFRAMES to restore the original six.
