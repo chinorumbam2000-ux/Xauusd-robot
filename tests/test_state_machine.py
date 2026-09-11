@@ -186,3 +186,46 @@ def test_entry_blocked_until_wpr_confirms():
     sm.arm(make_event(make_zone(), touch_bar=0, reaction_bar=1, index=bars.index))
     assert not sm.setup.wpr_confirmed
     assert sm.update(2, Regime.BUY).kind == "none"
+
+
+def test_push2_does_not_latch_when_entry_is_blocked():
+    """Push 2 describes the current bar completing the chain, not history.
+
+    Regression: push2 was set when the chain completed and never cleared. If
+    entry was blocked -- most commonly because the WPR exit had not confirmed --
+    the flag stayed latched while Push 1 reset on the next non-qualifying bar,
+    leaving the dashboard showing Push 2 satisfied with Push 1 dark.
+    """
+    import pandas as pd
+    from xauusd_robot.config import StrategyConfig
+    from xauusd_robot.regime import Regime
+    from xauusd_robot.state_machine import SetupStateMachine
+    from xauusd_robot.zones import ReactionEvent, Zone, ZoneType
+
+    rows = [
+        (100.0, 100.2, 99.0, 99.2),   # reaction, also qualifies as Push 1
+        (99.2, 99.3, 98.0, 98.1),     # completes the chain as Push 2
+        (98.1, 98.2, 97.0, 97.1),     # strong again -> new Push 1
+        (97.1, 97.9, 97.0, 97.6),     # weak -> chain broken
+    ]
+    df = pd.DataFrame(rows, columns=["open", "high", "low", "close"],
+                      index=pd.date_range("2026-01-01", periods=len(rows), freq="5min"))
+    df["wpr"] = -50.0  # never confirms, so entry can never fire
+
+    sm = SetupStateMachine(StrategyConfig(), df)
+    zone = Zone(id=1, type=ZoneType.SR, direction="SELL", low=99.8, high=100.3,
+                created_bar=0, created_time=df.index[0], expires_bar=96)
+    zone.touched, zone.touch_bar = True, 0
+    sm.arm(ReactionEvent(zone=zone, direction="SELL", reaction_bar=0,
+                         reaction_time=df.index[0], touch_bar=0,
+                         confluence_score=1, confluence_types=["SR"]))
+
+    for i in (1, 2, 3):
+        sm.update(i, Regime.SELL)
+        setup = sm.setup
+        assert setup is not None
+        # Push 2 can never be recorded while Push 1 is absent.
+        if setup.push2_bar is not None:
+            assert setup.push1_bar is not None, f"bar {i}: Push 2 set without Push 1"
+
+    assert sm.setup.push2_bar is None, "Push 2 latched after the chain broke"

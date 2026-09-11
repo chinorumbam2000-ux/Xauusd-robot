@@ -203,6 +203,13 @@ class SetupStateMachine:
             # Trigger removed: the WPR exit alone is the entry signal.
             return True
 
+        # Push 2 describes THIS bar completing the chain, nothing more. Without
+        # clearing it each bar it survived a broken chain: once set, a blocked
+        # entry (WPR not yet confirmed) left it latched while Push 1 reset
+        # underneath, so the dashboard showed Push 2 satisfied with Push 1 dark
+        # and the funnel counted chain completions that could never trade.
+        setup.push2, setup.push2_bar = None, None
+
         cand = self.candle(i)
         p1_threshold = cfg.push_body_ratio
         p2_threshold = cfg.push2_body_ratio if cfg.push2_body_ratio is not None else p1_threshold
