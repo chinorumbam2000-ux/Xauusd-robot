@@ -247,6 +247,45 @@ An already-open position is still protected, because SL/TP are registered server
 broker — you cannot miss a stop, but you will miss signals. 24/5 operation needs a VPS
 (Section 12).
 
+## Running unattended (Section 12)
+
+Everything needed to survive a restart is already in place: safety state, equity peak, locks and
+the trade ledger are persisted every bar; an open position is re-adopted by its magic number on
+startup; and stop-loss and take-profit live on the order itself, so a crash never leaves a
+position unprotected. What is missing is only a machine that stays awake.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\save_credentials.ps1   # once, encrypted at rest
+powershell -ExecutionPolicy Bypass -File scripts\install_autostart.ps1  # elevated; runs at boot
+Start-ScheduledTask -TaskName XauusdRobot
+```
+
+`save_credentials.ps1` stores the login through Windows DPAPI, so the file decrypts only for the
+same user on the same machine and is worthless if copied. `supervise.ps1` launches the terminal
+if it is not already up, restarts the robot if it exits, and backs off to five minutes if it dies
+within a minute — a process that fails instantly is misconfigured, not crashed, and retrying
+hard would just hammer the broker with logins. Both autostart and the supervisor default to
+**dry run**; arming is a deliberate action from the dashboard.
+
+### Where to host it
+
+| option | works with this robot | notes |
+| --- | --- | --- |
+| Windows VPS (any provider) | **yes** | Install MT5 + Python + this repo, then the scripts above. Typically $10–30/month. |
+| Cloud VM (AWS/Azure/GCP) | **yes** | Same as above; usually pricier than a purpose-built forex VPS. |
+| **MT5's own Virtual Hosting** | **no** | See below. |
+| Leaving your PC on | yes | Disable sleep. Free, but home power and internet are the weak links. |
+
+**MetaTrader's built-in Virtual Hosting will not run this robot.** That service migrates the
+terminal along with its charts, indicators and compiled MQL5 Expert Advisors. It does not migrate
+an external Python process, and the strategy here lives in Python talking to the terminal over
+IPC. Renting it would host the terminal with nothing driving it.
+
+Two ways around that, if broker-hosted VPS is the goal: run a normal Windows VPS instead (the
+table above), or port the strategy to a compiled MQL5 EA, which is what blueprint Section 6
+recommends for live execution in the first place. This Python layer was always intended as the
+research counterpart and the reference an EA should be validated against.
+
 **Risk is fixed to the initial balance.** $50 on a $1,000 start stays $50 as the account grows,
 so the *effective* risk decays (5% → 2.5% at $2,000 → 0.5% at $10,000), exactly as Section 5.2
 specifies.
