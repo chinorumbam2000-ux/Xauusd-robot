@@ -81,6 +81,7 @@
     <span id="p-running" class="pill off">stopped</span>
     <span id="p-mode" class="pill dry">DRY RUN</span>
     <span id="p-account" class="pill off">—</span>
+    <span id="p-conn" class="pill off" title="terminal session health">link ?</span>
   </div>
   <div class="row">
     <button id="btn-start" class="go">Start</button>
@@ -244,6 +245,13 @@ function render(s) {
   arm.dataset.live = (s.mode==='LIVE');
   arm.textContent = s.mode==='LIVE' ? 'Disarm (dry run)' : 'Arm live trading';
 
+  const symsForConn = Object.values(s.symbols || {});
+  const connOk = symsForConn.length ? symsForConn.every(x => x.connection_ok !== false) : true;
+  const conn = $('p-conn');
+  conn.textContent = connOk ? 'terminal ok' : 'TERMINAL LINK LOST';
+  conn.className = 'pill ' + (connOk ? 'on' : 'live');
+  if (!connOk) showBanner('Lost the MT5 terminal session. This is NOT the AutoTrading button — '
+                          + 'the robot cannot read account data and is skipping bars.');
   if (s.account) {
     const a=s.account;
     $('p-account').textContent = `${a.login} · ${a.server} · ${a.type}`;

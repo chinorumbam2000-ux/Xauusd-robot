@@ -204,6 +204,34 @@ class LiveTrader:
         if self.live:
             print("  autotrading  : ENABLED")
 
+    def connection_ok(self) -> bool:
+        """A session can keep serving bars after it stops serving account data,
+        so health is checked against account_info rather than the rate feed."""
+        try:
+            return self.mt5.terminal_info() is not None and self.mt5.account_info() is not None
+        except Exception:
+            return False
+
+    def reconnect(self) -> bool:
+        """Re-establish the terminal session after it drops."""
+        try:
+            self.mt5.shutdown()
+        except Exception:
+            pass
+        kwargs = {}
+        login, password, server = (
+            os.environ.get("MT5_LOGIN"), os.environ.get("MT5_PASSWORD"), os.environ.get("MT5_SERVER")
+        )
+        if login and password and server:
+            kwargs.update(login=int(login), password=password, server=server)
+        try:
+            if self.mt5.initialize(**kwargs) and self.mt5.account_info() is not None:
+                self._log("reconnected to the MT5 terminal")
+                return True
+        except Exception as exc:
+            self._log(f"reconnect failed: {type(exc).__name__}: {exc}")
+        return False
+
     def load_broker_spec(self) -> BrokerSpec:
         """Section 5.3: read the specification, never assume it."""
         if not self.mt5.symbol_select(self.symbol, True):
@@ -438,6 +466,16 @@ class LiveTrader:
         self.sync_closed_position()
 
         account = self.mt5.account_info()
+        if account is None:
+            # Bars can still arrive while the session is half-dead. Sizing, the
+            # equity peak and every circuit breaker depend on account data, so
+            # the bar is skipped rather than processed on stale values.
+            self.alert("connection_lost", "no account data from the terminal; skipping this bar")
+            if not self.reconnect():
+                return
+            account = self.mt5.account_info()
+            if account is None:
+                return
         self.safety.update_equity(account.equity)
         self.equity_curve.append({
             "time": str(self.last_bar_time),
@@ -696,6 +734,7 @@ class LiveTrader:
                 "max_losses_per_day": self.config.max_losses_per_day,
             }
 
+            snap["connection_ok"] = self.connection_ok()
             snap["alerts"] = list(self.alerts)[-8:]
             snap["equity_curve"] = self.equity_curve[-400:]
             snap["trades"] = self.closed_trades[-25:]
@@ -805,7 +844,18 @@ class LiveTrader:
         """Arm or disarm real order placement while the loop runs."""
         if live:
             terminal = self.mt5.terminal_info()
-            if terminal is None or not terminal.trade_allowed:
+            if terminal is None:
+                # A dead session and a disabled button are different problems and
+                # need different fixes; reporting one as the other sends the
+                # operator to toggle a button that is already on.
+                if not self.reconnect():
+                    return ("Lost the connection to the MT5 terminal (terminal_info returned "
+                            "nothing) and could not re-establish it. This is NOT the AutoTrading "
+                            "button. Check the terminal is running and logged in.")
+                terminal = self.mt5.terminal_info()
+            if terminal is None:
+                return "MT5 terminal is not responding."
+            if not terminal.trade_allowed:
                 return "AutoTrading is OFF in the MT5 terminal -- enable the Algo Trading button first."
             account = self.mt5.account_info()
             mode = TRADE_MODES.get(account.trade_mode, "UNKNOWN") if account else "UNKNOWN"
