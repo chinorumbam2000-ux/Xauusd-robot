@@ -19,3 +19,7 @@ state/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Compiled MQL5 output
+*.ex5
+mql5/*.log
