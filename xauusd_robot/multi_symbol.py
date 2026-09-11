@@ -18,7 +18,7 @@ from dataclasses import replace
 from typing import Dict, List, Optional
 
 from .adaptive import DEFAULT_EXPECTATION, PerformanceTracker, TradeLedger
-from .config import OBSERVATION_OVERRIDES, SYMBOL_SPECS, StrategyConfig, live_config
+from .config import SYMBOL_SPECS, StrategyConfig, live_config
 from .live import TRADE_MODES, LiveTrader, LiveTraderError
 from .portfolio import PortfolioLimits, PortfolioRisk, PortfolioState
 
@@ -36,7 +36,6 @@ class MultiSymbolTrader:
         poll_seconds: int = 10,
         limits: Optional[PortfolioLimits] = None,
         execution_tf: str = "M5",
-        observation_mode: bool = False,
     ):
         self.symbols = list(symbols)
         self.risk_percent = risk_percent
@@ -48,7 +47,6 @@ class MultiSymbolTrader:
         self.poll_seconds = poll_seconds
         self.limits = limits or PortfolioLimits()
         self.execution_tf = execution_tf
-        self.observation_mode = observation_mode
 
         self.traders: Dict[str, LiveTrader] = {}
         self.portfolio: Optional[PortfolioRisk] = None
@@ -91,21 +89,6 @@ class MultiSymbolTrader:
         primary.connect(terminal_path)  # validates demo/autotrading, sets account
         self.mt5 = primary.mt5
         account = primary.account
-
-        if self.observation_mode:
-            # No override for this one. Everything else in the robot has an
-            # escape hatch; disabling the loss limits on a funded account does
-            # not get one.
-            mode = TRADE_MODES.get(account.trade_mode, "UNKNOWN")
-            if mode != "DEMO":
-                raise LiveTraderError(
-                    f"observation mode disables the Section 5.5 circuit breakers and will not "
-                    f"run on a {mode} account. There is no flag to force this."
-                )
-            print("\n  *** OBSERVATION MODE: circuit breakers DISABLED ***")
-            print("      no daily trade cap, no daily loss limit, no 15% drawdown lock, no cooldown")
-            print("      stop-loss and take-profit REMAIN on every order")
-            print("      demo account only; drop --observe to restore them\n")
         self.portfolio = self._load_portfolio(account.balance)
 
         primary.portfolio = self.portfolio
@@ -122,12 +105,10 @@ class MultiSymbolTrader:
             self.traders[symbol] = trader
 
     def _make_trader(self, symbol: str) -> LiveTrader:
-        overrides = dict(OBSERVATION_OVERRIDES) if self.observation_mode else {}
         config = replace(
             live_config(self.risk_percent, SYMBOL_SPECS.get(symbol)),
             symbol=symbol,
             execution_tf=self.execution_tf,
-            **overrides,
         )
         return LiveTrader(
             config=config,
@@ -203,7 +184,6 @@ class MultiSymbolTrader:
             "learning": self.tracker.assess(),
             "precision_table": self.tracker.precision_table(),
             "risk_percent": self.risk_percent,
-            "observation_mode": self.observation_mode,
             "execution_tf": self.execution_tf,
         }
 
