@@ -112,6 +112,20 @@ class StrategyConfig:
     #: Section 3.4/4.6 make the two push candles mandatory. Setting this
     #: False removes the trigger entirely: entry fires as soon as the WPR
     #: exit confirms, with no candle-quality requirement at all.
+    #:
+    #: Measured at a risk low enough that the lockout truncates nothing, all
+    #: three settings are profitable -- the differences are in how much, and in
+    #: how deep the losing stretches get. Held to a 12% drawdown budget:
+    #:
+    #:   variant        risk  trades  /month  win%    expR   net%  wf   worst
+    #:   2 pushes       3.00      75     5.0  44.0  +0.750  165.1  4/5    0.0
+    #:   1 push         1.00     257    16.7  32.7  +0.289   72.0  4/5   -7.8
+    #:   no push        0.75     352    22.8  29.3  +0.159   40.9  3/5  -12.9
+    #:
+    #: Removing the trigger buys 4.5x the trade frequency and costs three
+    #: quarters of the return, because the weaker per-trade edge forces the risk
+    #: percent down. The worst walk-forward window also deepens from break-even
+    #: to -12.9R, so losing stretches get considerably harder to sit through.
     require_push_candles: bool = True
     #: How many consecutive push candles the trigger needs. Section 3.4
     #: specifies 2, where the second must also close beyond the first's
