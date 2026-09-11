@@ -104,7 +104,7 @@ def print_broker_spec(symbol: str) -> dict:
     return spec
 
 
-def fetch(symbol: str, years: float, chunk_days: int = 30) -> pd.DataFrame:
+def fetch(symbol: str, years: float, chunk_days: int = 30, timeframe: str = "M5") -> pd.DataFrame:
     """Pull M5 bars by walking backwards in chunks.
 
     A single copy_rates_range call stops returning data past roughly 180
@@ -121,7 +121,9 @@ def fetch(symbol: str, years: float, chunk_days: int = 30) -> pd.DataFrame:
 
     while cursor > floor:
         window_start = max(cursor - timedelta(days=chunk_days), floor)
-        rates = mt5.copy_rates_range(symbol, mt5.TIMEFRAME_M5, window_start, cursor)
+        tf = {"M1": mt5.TIMEFRAME_M1, "M5": mt5.TIMEFRAME_M5,
+              "M15": mt5.TIMEFRAME_M15, "M30": mt5.TIMEFRAME_M30}[timeframe]
+        rates = mt5.copy_rates_range(symbol, tf, window_start, cursor)
         if rates is None or len(rates) == 0:
             break
 
@@ -149,6 +151,7 @@ def main() -> None:
     parser.add_argument("--symbol", default="XAUUSD")
     parser.add_argument("--years", type=float, default=5.0, help="the D1 EMA200 alone needs 200 trading days")
     parser.add_argument("--out", default="data/XAUUSD_M5_live.csv")
+    parser.add_argument("--timeframe", default="M5", choices=("M1", "M5", "M15", "M30"))
     parser.add_argument("--terminal", default=r"C:\Program Files\MetaTrader 5\terminal64.exe")
     args = parser.parse_args()
 
@@ -156,7 +159,7 @@ def main() -> None:
     try:
         symbol = resolve_symbol(args.symbol)
         spec = print_broker_spec(symbol)
-        frame = fetch(symbol, args.years)
+        frame = fetch(symbol, args.years, timeframe=args.timeframe)
     finally:
         mt5.shutdown()
 

@@ -21,6 +21,7 @@ import pandas as pd
 from .indicators import add_core_indicators
 
 TF_FREQ: Mapping[str, str] = {
+    "M1": "1min",
     "M5": "5min",
     "M15": "15min",
     "M30": "30min",
@@ -56,9 +57,13 @@ def load_m5_csv(path: str, tz: str | None = None) -> pd.DataFrame:
     return df.astype({c: "float64" for c in REQUIRED_COLUMNS})
 
 
-def resample_ohlc(m5: pd.DataFrame, timeframe: str) -> pd.DataFrame:
-    """Resample M5 bars up to ``timeframe``. Bars are indexed by OPEN time."""
-    if timeframe == "M5":
+def resample_ohlc(m5: pd.DataFrame, timeframe: str, base_tf: str = "M5") -> pd.DataFrame:
+    """Resample base-timeframe bars up to ``timeframe``. Bars are indexed by OPEN time.
+
+    ``base_tf`` is the execution timeframe the input already is; asking for it
+    back is a no-op rather than a resample.
+    """
+    if timeframe == base_tf:
         out = m5[["open", "high", "low", "close"]].copy()
     else:
         rule = TF_FREQ[timeframe]
@@ -79,7 +84,7 @@ def build_timeframe_indicators(m5: pd.DataFrame, config) -> Dict[str, pd.DataFra
     """Resample to every regime timeframe and attach EMA/ATR/WPR indicators."""
     result: Dict[str, pd.DataFrame] = {}
     for tf in config.regime_timeframes:
-        bars = resample_ohlc(m5, tf)
+        bars = resample_ohlc(m5, tf, config.execution_tf)
         enriched = add_core_indicators(
             bars, config.ema_period, config.atr_period, config.wpr_period
         )
@@ -113,7 +118,8 @@ def build_regime_frame(m5_with_indicators: pd.DataFrame, tf_frames: Dict[str, pd
     """Build a single M5-indexed frame with each regime timeframe's closed
     price and EMA200 aligned with no look-ahead, ready for regime evaluation.
     """
-    m5_close_time = m5_with_indicators.index.to_series() + pd.tseries.frequencies.to_offset(TF_FREQ["M5"])
+    base_freq = TF_FREQ[config.execution_tf]
+    m5_close_time = m5_with_indicators.index.to_series() + pd.tseries.frequencies.to_offset(base_freq)
     pieces = []
     for tf in config.regime_timeframes:
         aligned = align_to_m5_close(m5_close_time, tf_frames[tf], prefix=tf, columns=("close", "ema"))
