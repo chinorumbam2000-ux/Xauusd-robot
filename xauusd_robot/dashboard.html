@@ -82,6 +82,9 @@
     <span id="p-mode" class="pill dry">DRY RUN</span>
     <span id="p-account" class="pill off">—</span>
     <span id="p-conn" class="pill off" title="terminal session health">link ?</span>
+    <span id="p-observe" class="pill live" style="display:none"
+          title="Section 5.5 circuit breakers are disabled">SAFETY OFF</span>
+    <span id="p-tf" class="pill off" title="entry timeframe">—</span>
   </div>
   <div class="row">
     <button id="btn-start" class="go">Start</button>
@@ -244,6 +247,15 @@ function render(s) {
   const arm=$('btn-arm');
   arm.dataset.live = (s.mode==='LIVE');
   arm.textContent = s.mode==='LIVE' ? 'Disarm (dry run)' : 'Arm live trading';
+
+  $('p-tf').textContent = (s.execution_tf || 'M5') + ' entries';
+  const obs = $('p-observe');
+  obs.style.display = s.observation_mode ? 'inline-block' : 'none';
+  if (s.observation_mode) {
+    showBanner('SAFETY OFF — daily limits, loss limit, 15% drawdown lock and cooldown are all '
+             + 'disabled. Stop-loss and take-profit are still on every order. Demo account only. '
+             + 'Restart without --observe to restore them.');
+  }
 
   const symsForConn = Object.values(s.symbols || {});
   const connOk = symsForConn.length ? symsForConn.every(x => x.connection_ok !== false) : true;

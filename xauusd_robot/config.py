@@ -279,6 +279,25 @@ COMBINATION_F = {
 }
 
 
+#: Section 5.5 circuit breakers relaxed for observation only. This exists so the
+#: machinery can be watched running without the safety layer halting it, which on
+#: a fast timeframe it otherwise will within days. It is NOT a trading
+#: configuration: it removes every limit that caps how much of an account a bad
+#: run can consume.
+#:
+#: What it deliberately does NOT touch is the stop-loss and take-profit attached
+#: to every order. Those are enforced broker-side and survive this process dying.
+#: A robot trading without stops is a different and far worse thing than a robot
+#: trading without daily limits.
+OBSERVATION_OVERRIDES = {
+    "max_trades_per_day": 10_000,
+    "max_losses_per_day": 10_000,
+    "daily_loss_limit_r": -10_000.0,
+    "max_peak_equity_drawdown": 0.95,
+    "cooldown_bars": 0,
+}
+
+
 def live_config(risk_percent: float = 2.0, broker: BrokerSpec | None = None) -> StrategyConfig:
     """The configuration the live/demo robot runs.
 

@@ -49,6 +49,9 @@ def main() -> None:
     parser.add_argument("--max-positions", type=int, default=2, help="account-wide open position cap")
     parser.add_argument("--max-per-cluster", type=int, default=1,
                         help="open positions allowed within one correlated group")
+    parser.add_argument("--observe", action="store_true",
+                        help="DEMO ONLY: disable the Section 5.5 circuit breakers so the machinery "
+                             "can be watched without halting itself. Stops stay on every order.")
     parser.add_argument("--no-browser", action="store_true")
     parser.add_argument("--live", action="store_true", help="start already armed (default: dry run)")
     parser.add_argument("--i-understand-this-is-real-money", action="store_true", help=argparse.SUPPRESS)
@@ -72,6 +75,7 @@ def main() -> None:
         poll_seconds=args.poll_seconds,
         limits=limits,
         execution_tf=args.execution_tf,
+        observation_mode=args.observe,
     )
 
     try:
