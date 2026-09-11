@@ -262,7 +262,8 @@ class LiveTrader:
 
     # ------------------------------------------------------------------
     def _fetch_bars(self, count: int) -> pd.DataFrame:
-        rates = self.mt5.copy_rates_from_pos(self.symbol, self.mt5.TIMEFRAME_M5, 0, count)
+        rates = self.mt5.copy_rates_from_pos(
+            self.symbol, self._mt5_timeframe(self.config.execution_tf), 0, count)
         if rates is None or len(rates) == 0:
             raise LiveTraderError(f"no M5 bars: {self.mt5.last_error()}")
         frame = pd.DataFrame(rates)
@@ -275,13 +276,14 @@ class LiveTrader:
         return frame.iloc[:-1]
 
     #: Bars per calendar day, used to size native history requests.
-    BARS_PER_DAY = {"D1": 1, "H4": 6, "H1": 24, "M30": 48, "M15": 96, "M5": 288}
+    BARS_PER_DAY = {"D1": 1, "H4": 6, "H1": 24, "M30": 48, "M15": 96, "M5": 288, "M1": 1440}
 
     def _mt5_timeframe(self, name: str):
         return {
             "D1": self.mt5.TIMEFRAME_D1, "H4": self.mt5.TIMEFRAME_H4,
             "H1": self.mt5.TIMEFRAME_H1, "M30": self.mt5.TIMEFRAME_M30,
             "M15": self.mt5.TIMEFRAME_M15, "M5": self.mt5.TIMEFRAME_M5,
+            "M1": self.mt5.TIMEFRAME_M1,
         }[name]
 
     def _fetch_native_timeframe(self, name: str, count: int) -> pd.DataFrame:
@@ -311,8 +313,9 @@ class LiveTrader:
         bars = add_core_indicators(raw, cfg.ema_period, cfg.atr_period, cfg.wpr_period,
                                   cfg.macd_fast, cfg.macd_slow, cfg.macd_signal)
 
-        window_days = max(1.0, len(raw) / 288.0)
-        m5_close_time = raw.index.to_series() + pd.tseries.frequencies.to_offset(TF_FREQ["M5"])
+        window_days = max(1.0, len(raw) / float(self.BARS_PER_DAY[cfg.execution_tf]))
+        base_freq = TF_FREQ[cfg.execution_tf]
+        m5_close_time = raw.index.to_series() + pd.tseries.frequencies.to_offset(base_freq)
 
         pieces, coverage = [], {}
         for tf in cfg.regime_timeframes:

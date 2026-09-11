@@ -37,6 +37,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--symbols", nargs="+", default=["XAUUSD"], choices=list(TRADEABLE_SYMBOLS))
     parser.add_argument("--risk", type=float, default=2.0, help="percent of INITIAL balance per trade")
+    parser.add_argument("--execution-tf", default="M5", choices=("M1", "M5", "M15"),
+                        help="entry timeframe; M1 trades far more often but tested at ~zero edge")
     parser.add_argument("--history-bars", type=int, default=60000)
     parser.add_argument("--terminal", default=r"C:\Program Files\MetaTrader 5\terminal64.exe")
     parser.add_argument("--state-dir", default="state")
@@ -69,6 +71,7 @@ def main() -> None:
         allow_real_money=args.i_understand_this_is_real_money,
         poll_seconds=args.poll_seconds,
         limits=limits,
+        execution_tf=args.execution_tf,
     )
 
     try:

@@ -35,6 +35,7 @@ class MultiSymbolTrader:
         allow_real_money: bool = False,
         poll_seconds: int = 10,
         limits: Optional[PortfolioLimits] = None,
+        execution_tf: str = "M5",
     ):
         self.symbols = list(symbols)
         self.risk_percent = risk_percent
@@ -45,6 +46,7 @@ class MultiSymbolTrader:
         self.allow_real_money = allow_real_money
         self.poll_seconds = poll_seconds
         self.limits = limits or PortfolioLimits()
+        self.execution_tf = execution_tf
 
         self.traders: Dict[str, LiveTrader] = {}
         self.portfolio: Optional[PortfolioRisk] = None
@@ -106,6 +108,7 @@ class MultiSymbolTrader:
         config = replace(
             live_config(self.risk_percent, SYMBOL_SPECS.get(symbol)),
             symbol=symbol,
+            execution_tf=self.execution_tf,
         )
         return LiveTrader(
             config=config,
