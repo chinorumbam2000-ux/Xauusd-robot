@@ -61,7 +61,7 @@ input group "=== Setup lifecycle ==="
 input int    InpReactionMaxBars    = 2;
 input int    InpSetupExpiryBars    = 8;      // combination F (blueprint: 5)
 input double InpPushBodyRatio      = 0.65;   // Push 1: combination F (blueprint: 0.60)
-input double InpPush2BodyRatio     = 0.60;   // Push 2: only has to show continuation
+input double InpPush2BodyRatio     = 0.50;   // Push 2: only has to show continuation
 input bool   InpPush2BreaksPush1   = true;
 input int    InpPushCandlesReq     = 2;      // 2 is where the edge is
 

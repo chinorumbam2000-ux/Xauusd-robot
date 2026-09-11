@@ -280,7 +280,8 @@ class LiveTrader:
     def _enrich(self, raw: pd.DataFrame) -> pd.DataFrame:
         """Attach indicators and build the regime frame from NATIVE broker bars."""
         cfg = self.config
-        bars = add_core_indicators(raw, cfg.ema_period, cfg.atr_period, cfg.wpr_period)
+        bars = add_core_indicators(raw, cfg.ema_period, cfg.atr_period, cfg.wpr_period,
+                                  cfg.macd_fast, cfg.macd_slow, cfg.macd_signal)
 
         window_days = max(1.0, len(raw) / 288.0)
         m5_close_time = raw.index.to_series() + pd.tseries.frequencies.to_offset(TF_FREQ["M5"])

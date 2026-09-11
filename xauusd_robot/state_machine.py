@@ -84,6 +84,8 @@ class SetupStateMachine:
         self.low = bars["low"].to_numpy()
         self.close = bars["close"].to_numpy()
         self.wpr = bars["wpr"].to_numpy()
+        self.macd_hist = (bars["macd_hist"].to_numpy()
+                          if "macd_hist" in bars.columns else None)
 
     # ------------------------------------------------------------------
     @property
@@ -173,7 +175,17 @@ class SetupStateMachine:
 
     # ------------------------------------------------------------------
     def _advance_wpr(self, setup: Setup, i: int) -> None:
+        """Advance the momentum gate. Field names are historical -- they hold the
+        generic primed/confirmed pair whichever filter is selected."""
         cfg = self.config
+        if cfg.momentum_filter == "none":
+            setup.wpr_extreme_seen = True
+            setup.wpr_confirmed = True
+            return
+        if cfg.momentum_filter == "macd":
+            self._advance_macd(setup, i)
+            return
+
         value = self.wpr[i]
         if np.isnan(value):
             return
@@ -195,6 +207,25 @@ class SetupStateMachine:
                 setup.wpr_confirmed = True
                 setup.wpr_exit_bar = i
                 setup.wpr_exit_value = float(value)
+
+    def _advance_macd(self, setup: Setup, i: int) -> None:
+        """MACD analogue of the WPR rule: histogram against the trade (primed),
+        then crossing through zero in the trade's favour (confirmed)."""
+        if self.macd_hist is None:
+            return
+        value = self.macd_hist[i]
+        if np.isnan(value):
+            return
+        if setup.direction == "BUY":
+            if value < 0:
+                setup.wpr_extreme_seen = True
+            elif setup.wpr_extreme_seen and not setup.wpr_confirmed and value > 0:
+                setup.wpr_confirmed = True
+        else:
+            if value > 0:
+                setup.wpr_extreme_seen = True
+            elif setup.wpr_extreme_seen and not setup.wpr_confirmed and value < 0:
+                setup.wpr_confirmed = True
 
     def _advance_push(self, setup: Setup, i: int) -> bool:
         """Track the two-consecutive-push-candle chain. Returns True on Push 2."""

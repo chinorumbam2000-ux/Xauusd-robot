@@ -82,6 +82,13 @@ class StrategyConfig:
     wpr_oversold: float = -80.0
     wpr_overbought: float = -20.0
     wpr_max_lead_bars: int = 2
+    #: Which momentum gate confirms the setup. "wpr" is the blueprint rule
+    #: (Section 3.3); "macd" substitutes a signal-line cross; "none" removes
+    #: the gate entirely and is only useful as a control.
+    momentum_filter: str = "wpr"
+    macd_fast: int = 12
+    macd_slow: int = 26
+    macd_signal: int = 9
     atr_period: int = 14
 
     # --- Order Block ---
@@ -250,14 +257,25 @@ COMBINATION_F = {
     "push_body_ratio": 0.65,           # was 0.60 -- Push 1 stays strict
     # Push 2 only has to show the move is still going, and the
     # break-beyond-Push-1 test already carries most of that proof, so it is held
-    # to the blueprint's 0.60 rather than Push 1's 0.65. Measured at 0.5% risk
-    # (untruncated), the asymmetric pair beats lowering BOTH to 0.60: 62.2R
-    # against 56.1R, on lower drawdown (2.86% against 3.42%).
+    # well below Push 1's 0.65.
     #
-    # Held to a 12% drawdown budget it improves every robust measure --
-    # walk-forward windows 5/5 against 4/5, worst window +7.0R against 0.0R,
-    # walk-forward total 47.2R against 32.2R -- for 20% more trades.
-    "push2_body_ratio": 0.60,
+    # The threshold surface at 0.5% risk (untruncated) peaks at 0.50-0.45, and
+    # both land on 72.2R -- two adjacent values agreeing, which is the plateau
+    # Section 10 asks for rather than a spike:
+    #
+    #   push2   trades   expR  totalR  maxDD%
+    #    0.65       74  0.773    57.2    2.42
+    #    0.60       89  0.699    62.2    2.86
+    #    0.55      105  0.593    62.2    3.67
+    #    0.50      115  0.628    72.2    2.84
+    #    0.45      129  0.559    72.2    2.78
+    #    0.40      140  0.465    65.2    3.83
+    #
+    # The 31 trades 0.50 admits over 0.60 win 38.7% at +0.548R, well clear of
+    # the 25% break-even, so this is extra edge rather than extra volume. The
+    # expectancy difference against 0.60 is not significant (t=-0.25), and
+    # drawdown is fractionally lower.
+    "push2_body_ratio": 0.50,
 }
 
 

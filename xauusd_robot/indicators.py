@@ -42,18 +42,34 @@ def williams_percent_r(high: pd.Series, low: pd.Series, close: pd.Series, period
     return wpr
 
 
+def macd(close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
+    """Standard MACD. Returns (line, signal, histogram).
+
+    The histogram's sign change is the signal-line cross, which is the closest
+    structural analogue to Williams %R leaving an extreme: momentum was against
+    the trade, and has now turned in its favour.
+    """
+    ema_fast = close.ewm(span=fast, adjust=False, min_periods=fast).mean()
+    ema_slow = close.ewm(span=slow, adjust=False, min_periods=slow).mean()
+    line = ema_fast - ema_slow
+    sig = line.ewm(span=signal, adjust=False, min_periods=signal).mean()
+    return line, sig, line - sig
+
+
 def body_range_ratio(open_: pd.Series, high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
     """|Close - Open| / (High - Low), the push-candle strength metric (Section 4.6)."""
     rng = (high - low).replace(0.0, np.nan)
     return (close - open_).abs() / rng
 
 
-def add_core_indicators(df: pd.DataFrame, ema_period: int, atr_period: int, wpr_period: int) -> pd.DataFrame:
+def add_core_indicators(df: pd.DataFrame, ema_period: int, atr_period: int, wpr_period: int,
+                        macd_fast: int = 12, macd_slow: int = 26, macd_signal: int = 9) -> pd.DataFrame:
     """Return a copy of ``df`` (columns open/high/low/close) with EMA/ATR/WPR/body-ratio added."""
     out = df.copy()
     out["ema"] = ema(out["close"], ema_period)
     out["atr"] = atr(out["high"], out["low"], out["close"], atr_period)
     out["wpr"] = williams_percent_r(out["high"], out["low"], out["close"], wpr_period)
+    _, _, out["macd_hist"] = macd(out["close"], macd_fast, macd_slow, macd_signal)
     out["body_range_ratio"] = body_range_ratio(out["open"], out["high"], out["low"], out["close"])
     out["bullish"] = out["close"] > out["open"]
     out["bearish"] = out["close"] < out["open"]

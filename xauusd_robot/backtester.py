@@ -96,7 +96,8 @@ class Backtester:
     # ------------------------------------------------------------------
     def _prepare(self) -> None:
         cfg = self.config
-        self.bars = add_core_indicators(self.raw, cfg.ema_period, cfg.atr_period, cfg.wpr_period)
+        self.bars = add_core_indicators(self.raw, cfg.ema_period, cfg.atr_period, cfg.wpr_period,
+                                        cfg.macd_fast, cfg.macd_slow, cfg.macd_signal)
         tf_frames = build_timeframe_indicators(self.raw, cfg)
         regime_frame = build_regime_frame(self.bars, tf_frames, cfg)
         self.regime = compute_regime(regime_frame, cfg.regime_timeframes)
