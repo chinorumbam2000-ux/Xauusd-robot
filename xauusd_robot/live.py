@@ -347,7 +347,7 @@ class LiveTrader:
         self.zone_engine = ZoneEngine(self.config, self.bars)
         self.sm = SetupStateMachine(self.config, self.bars)
 
-        print(f"  history      : {len(self.bars):,} closed M5 bars "
+        print(f"  history      : {len(self.bars):,} closed {self.config.execution_tf} bars "
               f"({self.bars.index[0]} -> {self.bars.index[-1]})")
         print("  replaying history to rebuild zone state...")
         for i in range(len(self.bars)):
@@ -735,6 +735,7 @@ class LiveTrader:
                 "risk_budget": round(state.initial_balance * self.config.risk_fraction(), 2),
                 "max_trades_per_day": self.config.max_trades_per_day,
                 "max_losses_per_day": self.config.max_losses_per_day,
+                "daily_loss_limit_r": self.config.daily_loss_limit_r,
             }
 
             snap["connection_ok"] = self.connection_ok()

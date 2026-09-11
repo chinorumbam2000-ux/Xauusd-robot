@@ -136,7 +136,23 @@
   </div>
 
   <div class="panel">
-    <h2>Portfolio risk</h2>
+    <h2>Circuit breakers — <span id="cb-sym">this symbol</span></h2>
+    <div class="dim" style="font-size:11.5px;margin:-4px 0 8px">
+      These bind first and are what actually stops trading.
+    </div>
+    <div class="kv"><span>Trades today</span><span id="cb-trades">—</span></div>
+    <div class="kv"><span>Losses today</span><span id="cb-losses">—</span></div>
+    <div class="kv"><span>Daily realised R</span><span id="cb-r">—</span></div>
+    <div class="kv"><span>Cooldown</span><span id="cb-cool">—</span></div>
+    <div class="kv"><span>Drawdown lock</span><span id="cb-dd">—</span></div>
+    <div class="kv"><span>10x target</span><span id="cb-target">—</span></div>
+  </div>
+
+  <div class="panel">
+    <h2>Portfolio risk (account-wide)</h2>
+    <div class="dim" style="font-size:11.5px;margin:-4px 0 8px">
+      Sits above the per-symbol limits; with one symbol these rarely bind.
+    </div>
     <div class="kv"><span>Open positions</span><span id="pf-open">—</span></div>
     <div class="kv"><span>Correlated cap</span><span id="pf-cluster">—</span></div>
     <div class="kv"><span>Trades today</span><span id="pf-trades">—</span></div>
@@ -324,6 +340,21 @@ function render(s) {
   $('steps').innerHTML = [['Zone reaction',!!su.direction],['WPR extreme',!!su.wpr_extreme_seen],
     ['WPR exit',!!su.wpr_confirmed],['Push 1',!!su.push1],['Push 2',!!su.push2]]
     .map(([n,done])=>`<div class="step ${done?'done':''}">${n}</div>`).join('');
+
+  // Per-symbol breakers: these are the ones that halt trading first, so they
+  // get their own panel rather than being implied by the portfolio numbers.
+  const f = d.safety || {};
+  $('cb-sym').textContent = selected || 'this symbol';
+  const atCap = (a, b) => (a !== undefined && b !== undefined && a >= b);
+  $('cb-trades').innerHTML = `<span class="${atCap(f.trades_today, f.max_trades_per_day) ? 'down' : ''}">`
+    + `${f.trades_today ?? '—'} / ${f.max_trades_per_day ?? '—'}</span>`;
+  $('cb-losses').innerHTML = `<span class="${atCap(f.losses_today, f.max_losses_per_day) ? 'down' : ''}">`
+    + `${f.losses_today ?? '—'} / ${f.max_losses_per_day ?? '—'}</span>`;
+  $('cb-r').innerHTML = `<span class="${(f.daily_realized_r ?? 0) <= (f.daily_loss_limit_r ?? -2) ? 'down' : ''}">`
+    + `${fmt(f.daily_realized_r, 2)}R / ${fmt(f.daily_loss_limit_r, 1)}R</span>`;
+  $('cb-cool').innerHTML = f.cooldown_active ? '<span class="warn">active</span>' : 'clear';
+  $('cb-dd').innerHTML = f.drawdown_locked ? '<span class="down">LOCKED</span>' : 'armed';
+  $('cb-target').innerHTML = f.target_reached ? '<span class="down">REACHED</span>' : 'not reached';
 
   const p = s.portfolio || {};
   $('pf-open').textContent = `${p.total_open ?? 0} / ${p.max_total_positions ?? '—'}`;

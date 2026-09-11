@@ -36,6 +36,7 @@ class MultiSymbolTrader:
         poll_seconds: int = 10,
         limits: Optional[PortfolioLimits] = None,
         execution_tf: str = "M5",
+        symbol_limits: Optional[Dict] = None,
     ):
         self.symbols = list(symbols)
         self.risk_percent = risk_percent
@@ -47,6 +48,8 @@ class MultiSymbolTrader:
         self.poll_seconds = poll_seconds
         self.limits = limits or PortfolioLimits()
         self.execution_tf = execution_tf
+        #: Per-symbol Section 5.5 overrides, empty for blueprint values.
+        self.symbol_limits = dict(symbol_limits or {})
 
         self.traders: Dict[str, LiveTrader] = {}
         self.portfolio: Optional[PortfolioRisk] = None
@@ -109,6 +112,7 @@ class MultiSymbolTrader:
             live_config(self.risk_percent, SYMBOL_SPECS.get(symbol)),
             symbol=symbol,
             execution_tf=self.execution_tf,
+            **self.symbol_limits,
         )
         return LiveTrader(
             config=config,
