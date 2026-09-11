@@ -48,13 +48,23 @@ class StrategyConfig:
     # --- Instrument / timeframe ---
     symbol: str = "XAUUSD"
     execution_tf: str = "M5"
-    #: DEVIATION FROM BLUEPRINT v1.1 (Section 3.1 specifies six timeframes
-    #: including D1). D1 was removed by explicit instruction. Two consequences
-    #: worth tracking: the regime aligns more often, so the system trades more
-    #: and is less selective; and warm-up drops from ~57,600 M5 bars (200 daily
-    #: bars) to ~14,400 (200 H4 bars), which makes far more history testable.
-    #: Set BLUEPRINT_REGIME_TIMEFRAMES to restore the original filter.
-    regime_timeframes: Tuple[str, ...] = ("H4", "H1", "M30", "M15", "M5")
+    #: DEVIATION FROM BLUEPRINT v1.1 (Section 3.1 specifies six timeframes:
+    #: D1, H4, H1, M30, M15, M5). D1 and M15 have been removed.
+    #:
+    #: M15 was measured as entirely redundant: adding or removing it produced
+    #: byte-identical results, because it sits between M30 and M5 in the trend
+    #: hierarchy and effectively never disagrees with both.
+    #:
+    #: M5 is NOT redundant, and was kept for that reason. Dropping it takes the
+    #: win rate from 44.0% to 21.4% -- below the 25% break-even a 1:3 payoff
+    #: needs -- turns expectancy negative at -0.143R, and drives drawdown to
+    #: 15.41%, which trips the peak-equity lockout. Requiring the execution
+    #: timeframe to agree with its own EMA200 is what stops the robot buying
+    #: into a falling M5 trend.
+    #:
+    #: Warm-up is ~14,400 M5 bars, set by H4 as the slowest member.
+    #: Set BLUEPRINT_REGIME_TIMEFRAMES to restore the original six.
+    regime_timeframes: Tuple[str, ...] = ("H4", "H1", "M30", "M5")
 
     # --- Indicators ---
     ema_period: int = 200
