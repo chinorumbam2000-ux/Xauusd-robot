@@ -108,6 +108,12 @@ class StrategyConfig:
 
     # --- Push candles ---
     push_body_ratio: float = 0.60
+    #: Body ratio required of Push 2 specifically. None means "same as
+    #: push_body_ratio". The two candles do different jobs -- Push 1
+    #: establishes the impulse, Push 2 only has to show the move is still
+    #: going, and the break-beyond-Push-1 test already carries most of that
+    #: proof -- so they need not share a threshold.
+    push2_body_ratio: Optional[float] = None
     push2_breaks_push1: bool = True
     #: Section 3.4/4.6 make the two push candles mandatory. Setting this
     #: False removes the trigger entirely: entry fires as soon as the WPR
@@ -241,7 +247,17 @@ COMBINATION_F = {
     "wpr_max_lead_bars": 5,            # was 2
     "setup_expiry_bars": 8,            # was 5
     "sr_zone_atr": 0.15,               # was 0.10
-    "push_body_ratio": 0.65,           # was 0.60 -- the one TIGHTENING
+    "push_body_ratio": 0.65,           # was 0.60 -- Push 1 stays strict
+    # Push 2 only has to show the move is still going, and the
+    # break-beyond-Push-1 test already carries most of that proof, so it is held
+    # to the blueprint's 0.60 rather than Push 1's 0.65. Measured at 0.5% risk
+    # (untruncated), the asymmetric pair beats lowering BOTH to 0.60: 62.2R
+    # against 56.1R, on lower drawdown (2.86% against 3.42%).
+    #
+    # Held to a 12% drawdown budget it improves every robust measure --
+    # walk-forward windows 5/5 against 4/5, worst window +7.0R against 0.0R,
+    # walk-forward total 47.2R against 32.2R -- for 20% more trades.
+    "push2_body_ratio": 0.60,
 }
 
 

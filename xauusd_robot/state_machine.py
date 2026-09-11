@@ -204,28 +204,35 @@ class SetupStateMachine:
             return True
 
         cand = self.candle(i)
-        qualifies = is_qualifying_push(cand, setup.direction, cfg.push_body_ratio)
+        p1_threshold = cfg.push_body_ratio
+        p2_threshold = cfg.push2_body_ratio if cfg.push2_body_ratio is not None else p1_threshold
+        # The same candle is judged by a different bar depending on which role it
+        # is being considered for.
+        as_push1 = is_qualifying_push(cand, setup.direction, p1_threshold)
+        as_push2 = is_qualifying_push(cand, setup.direction, p2_threshold)
 
         if cfg.push_candles_required <= 1:
             # One push candle: keep the directional body-quality test, drop the
             # continuation confirmation that Push 2 provides.
-            if qualifies:
+            if as_push1:
                 setup.push1, setup.push1_bar = cand, i
                 return True
             setup.push1, setup.push1_bar = None, None
             return False
 
         if setup.push1 is not None and setup.push1_bar == i - 1:
-            if qualifies and (
+            if as_push2 and (
                 not cfg.push2_breaks_push1 or push2_breaks_push1(setup.push1, cand, setup.direction)
             ):
                 setup.push2 = cand
                 setup.push2_bar = i
                 return True
-            setup.push1, setup.push1_bar = (cand, i) if qualifies else (None, None)
+            # Failed as Push 2, but it may still be strong enough to start a
+            # fresh chain as Push 1.
+            setup.push1, setup.push1_bar = (cand, i) if as_push1 else (None, None)
             return False
 
-        setup.push1, setup.push1_bar = (cand, i) if qualifies else (None, None)
+        setup.push1, setup.push1_bar = (cand, i) if as_push1 else (None, None)
         return False
 
     def _sync_state(self, setup: Setup) -> None:

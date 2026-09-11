@@ -60,7 +60,8 @@ input double InpFvgMinAtr          = 0.10;
 input group "=== Setup lifecycle ==="
 input int    InpReactionMaxBars    = 2;
 input int    InpSetupExpiryBars    = 8;      // combination F (blueprint: 5)
-input double InpPushBodyRatio      = 0.65;   // combination F (blueprint: 0.60)
+input double InpPushBodyRatio      = 0.65;   // Push 1: combination F (blueprint: 0.60)
+input double InpPush2BodyRatio     = 0.60;   // Push 2: only has to show continuation
 input bool   InpPush2BreaksPush1   = true;
 input int    InpPushCandlesReq     = 2;      // 2 is where the edge is
 
@@ -624,24 +625,28 @@ void AdvanceWpr(const int shift)
      }
   }
 
-bool QualifyingPush(const int shift)
+// `threshold` differs by role: Push 1 establishes the impulse, Push 2 only has
+// to show the move is still going.
+bool QualifyingPush(const int shift, const double threshold)
   {
    double o = iOpen(_Symbol, PERIOD_M5, shift), c = iClose(_Symbol, PERIOD_M5, shift);
    double h = iHigh(_Symbol, PERIOD_M5, shift), l = iLow(_Symbol, PERIOD_M5, shift);
    double range = h - l;
    if(range <= 0.0) return(false);
-   if(MathAbs(c - o) / range < InpPushBodyRatio) return(false);
+   if(MathAbs(c - o) / range < threshold) return(false);
    return(g_setup.direction == DIR_BUY ? (c > o) : (c < o));
   }
 
 // Returns true when the push requirement is satisfied on bar `shift`.
 bool AdvancePush(const int shift)
   {
-   bool q = QualifyingPush(shift);
+   double p2_threshold = (InpPush2BodyRatio > 0.0) ? InpPush2BodyRatio : InpPushBodyRatio;
+   bool as_push1 = QualifyingPush(shift, InpPushBodyRatio);
+   bool as_push2 = QualifyingPush(shift, p2_threshold);
 
    if(InpPushCandlesReq <= 1)
      {
-      if(q)
+      if(as_push1)
         {
          g_setup.push1_set = true;
          g_setup.push1_time = iTime(_Symbol, PERIOD_M5, shift);
@@ -654,7 +659,7 @@ bool AdvancePush(const int shift)
    // Two consecutive: Push 1 must be the immediately preceding bar.
    if(g_setup.push1_set && iBarShift(_Symbol, PERIOD_M5, g_setup.push1_time) == shift + 1)
      {
-      if(q)
+      if(as_push2)
         {
          bool brk = true;
          if(InpPush2BreaksPush1)
@@ -665,7 +670,7 @@ bool AdvancePush(const int shift)
         }
      }
 
-   if(q)
+   if(as_push1)
      {
       g_setup.push1_set  = true;
       g_setup.push1_time = iTime(_Symbol, PERIOD_M5, shift);
