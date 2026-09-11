@@ -202,8 +202,18 @@ class SetupStateMachine:
         if not cfg.require_push_candles:
             # Trigger removed: the WPR exit alone is the entry signal.
             return True
+
         cand = self.candle(i)
         qualifies = is_qualifying_push(cand, setup.direction, cfg.push_body_ratio)
+
+        if cfg.push_candles_required <= 1:
+            # One push candle: keep the directional body-quality test, drop the
+            # continuation confirmation that Push 2 provides.
+            if qualifies:
+                setup.push1, setup.push1_bar = cand, i
+                return True
+            setup.push1, setup.push1_bar = None, None
+            return False
 
         if setup.push1 is not None and setup.push1_bar == i - 1:
             if qualifies and (

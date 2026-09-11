@@ -103,6 +103,12 @@ class StrategyConfig:
     #: False removes the trigger entirely: entry fires as soon as the WPR
     #: exit confirms, with no candle-quality requirement at all.
     require_push_candles: bool = True
+    #: How many consecutive push candles the trigger needs. Section 3.4
+    #: specifies 2, where the second must also close beyond the first's
+    #: extreme. Setting 1 keeps the directional body-quality test but drops
+    #: the continuation requirement, so entry fires on the first qualifying
+    #: candle. push2_breaks_push1 is then irrelevant.
+    push_candles_required: int = 2
 
     # --- Stop-loss buffer ---
     sl_buffer_atr: float = 0.10
