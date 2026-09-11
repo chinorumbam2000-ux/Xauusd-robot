@@ -199,6 +199,9 @@ class SetupStateMachine:
     def _advance_push(self, setup: Setup, i: int) -> bool:
         """Track the two-consecutive-push-candle chain. Returns True on Push 2."""
         cfg = self.config
+        if not cfg.require_push_candles:
+            # Trigger removed: the WPR exit alone is the entry signal.
+            return True
         cand = self.candle(i)
         qualifies = is_qualifying_push(cand, setup.direction, cfg.push_body_ratio)
 

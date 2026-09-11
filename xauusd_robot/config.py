@@ -99,6 +99,10 @@ class StrategyConfig:
     # --- Push candles ---
     push_body_ratio: float = 0.60
     push2_breaks_push1: bool = True
+    #: Section 3.4/4.6 make the two push candles mandatory. Setting this
+    #: False removes the trigger entirely: entry fires as soon as the WPR
+    #: exit confirms, with no candle-quality requirement at all.
+    require_push_candles: bool = True
 
     # --- Stop-loss buffer ---
     sl_buffer_atr: float = 0.10
